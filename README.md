@@ -116,6 +116,20 @@ Aar Desktop is a friendly front end for aar on Windows. It talks to the agent th
 so the agent can see and operate your programs. Learn more on the
 [aar website](https://fischerf.github.io/aar/).
 
+## Disclaimer
+
+Aar Desktop is free, open-source software provided **"as is", without warranty of any kind**, as set out in the
+[Apache License 2.0](LICENSE). **You use it at your own risk.**
+
+Aar Desktop lets an AI agent operate programs, write files and run commands on your computer. Language models
+make mistakes, and actions you allow can change or delete data, send messages or cause other effects that cannot
+be undone. To the extent permitted by applicable law, the author is not liable for any damage, data loss or other
+consequences arising from the use of this software. Read every permission request before you allow it, keep
+backups, and do not use Aar Desktop with productive, sensitive or personal data.
+
+Third-party components – language models, Ollama, cloud providers, extensions and tool servers – are subject to
+their own licenses and terms of use.
+
 ## Author
 
 **Florian Fischer**
