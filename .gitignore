@@ -1,0 +1,17 @@
+node_modules/
+dist/
+dist-web/
+dist-py/
+src-tauri/target/
+src-tauri/gen/
+*.log
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+
+# local agent/tool state
+.agent/
+.claude/
+
+CLAUDE.md
+docs/next-session.md

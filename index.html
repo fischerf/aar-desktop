@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Aar</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <!-- Texts come from src/i18n.ts + the dictionary in src/main.ts (data-i18n*). -->
+    <div id="app" class="collapsed">
+      <section id="bubble" data-i18n-aria="bubbleAria">
+        <!-- resize grips (window grows up/left, the mascot stays anchored bottom-right) -->
+        <div class="grip grip-n" data-resize="North"></div>
+        <div class="grip grip-w" data-resize="West"></div>
+        <div class="grip grip-nw" data-resize="NorthWest" data-i18n-tip="tipResize" data-tip-pos="right"></div>
+
+        <header id="bubble-header" data-tauri-drag-region>
+          <span class="dot" id="conn-dot" data-tauri-drag-region></span>
+          <span class="title" data-tauri-drag-region>Aar</span>
+          <span class="status" id="status-text" data-tauri-drag-region></span>
+          <span class="spacer" data-tauri-drag-region></span>
+          <span class="ctx" id="ctx-meter" role="meter" aria-valuemin="0" hidden><span class="ctx-bar"><span id="ctx-fill"></span></span><span id="ctx-text"></span></span>
+          <button class="icon-btn" id="btn-new" data-i18n-tip="newChat" data-i18n-aria="newChat">＋</button>
+          <button class="icon-btn" id="btn-settings" data-i18n-tip="settings" data-i18n-aria="settings">⚙</button>
+          <button class="icon-btn" id="btn-close" data-i18n-tip="tipCollapse" data-i18n-aria="collapse">✕</button>
+        </header>
+
+        <main id="messages" aria-live="polite"></main>
+
+        <section id="settings" hidden>
+          <h2 data-i18n="settings"></h2>
+          <nav class="tabs" role="tablist">
+            <button type="button" role="tab" id="tab-general" data-tab="general" data-i18n="tabGeneral"></button>
+            <button type="button" role="tab" id="tab-extensions" data-tab="extensions" data-i18n="tabExtensions"></button>
+            <button type="button" role="tab" id="tab-tools" data-tab="tools" data-i18n="tabTools"></button>
+            <button type="button" role="tab" id="tab-photos" data-tab="photos" data-i18n="tabPhotos"></button>
+          </nav>
+
+          <div class="pane" data-pane="general">
+            <h3 data-i18n="thisConversation"></h3>
+            <div id="session-options"></div>
+
+            <h3 data-i18n="abilities"></h3>
+            <label class="check">
+              <input type="checkbox" id="set-desktop" />
+              <span data-i18n="desktopControl"></span>
+            </label>
+            <p class="hint" data-i18n="desktopControlHint"></p>
+            <label class="check">
+              <input type="checkbox" id="set-autostart" />
+              <span data-i18n="autostart"></span>
+            </label>
+            <p class="hint bad" id="autostart-problem"></p>
+
+            <h3 data-i18n="languageHead"></h3>
+            <label><span data-i18n="languageLabel"></span>
+              <select id="set-language"></select>
+            </label>
+
+            <h3 data-i18n="connectionHead"></h3>
+            <label><span data-i18n="profile"></span>
+              <select id="set-provider"></select>
+            </label>
+            <p class="notice warn" id="cloud-note" hidden></p>
+            <label id="apikey-row" hidden><span data-i18n="apiKey"></span> <small data-i18n="apiKeyHint"></small>
+              <input id="set-apikey" type="password" spellcheck="false" autocomplete="off" />
+            </label>
+            <label><span data-i18n="serverAddress"></span> <small data-i18n="emptyFromProfile"></small>
+              <span class="row">
+                <input id="set-baseurl" spellcheck="false" />
+                <button id="btn-test" class="secondary" type="button" data-i18n="test" data-i18n-tip="tipTest"></button>
+              </span>
+            </label>
+            <p class="hint" id="test-result"></p>
+            <label><span data-i18n="model"></span> <small data-i18n="emptyFromProfile"></small>
+              <input id="set-model" spellcheck="false" list="model-list" />
+              <datalist id="model-list"></datalist>
+            </label>
+            <p class="hint" id="config-hint"></p>
+            <p><button id="btn-open-setup" class="secondary" type="button" data-i18n="openSetup" data-i18n-tip="tipSetup" data-tip-pos="right"></button></p>
+
+            <details class="advanced">
+              <summary data-i18n="advanced"></summary>
+              <label><span data-i18n="configFile"></span> <small data-i18n="configFileDefault"></small>
+                <input id="set-config" spellcheck="false" />
+              </label>
+              <label><span data-i18n="agentProgram"></span>
+                <input id="set-command" spellcheck="false" data-i18n-placeholder="agentProgramAuto" />
+              </label>
+              <label><span data-i18n="arguments"></span> <small data-i18n="argumentsHint"></small>
+                <input id="set-args" spellcheck="false" />
+              </label>
+              <label><span data-i18n="workingDir"></span> <small data-i18n="workingDirDefault"></small>
+                <input id="set-cwd" spellcheck="false" />
+              </label>
+              <label><span data-i18n="hotkey"></span>
+                <input id="set-hotkey" spellcheck="false" />
+              </label>
+            </details>
+            <h3 data-i18n="troubleshooting"></h3>
+            <p class="diag">
+              <button id="btn-open-sessions" class="link" type="button" data-i18n="showSessions" data-i18n-tip="tipSessions" data-tip-pos="right"></button>
+              <button id="btn-open-log" class="link" type="button" data-i18n="showLog" data-i18n-tip="tipLog" data-tip-pos="right"></button>
+            </p>
+            <p class="hint" id="diag-paths"></p>
+            <p class="hint bad" id="diag-error"></p>
+            <p class="version">
+              <span id="version-info"></span>
+              <button id="btn-copy-version" class="link" type="button" data-i18n="copy" data-i18n-tip="tipCopyVersion" data-tip-pos="top"></button>
+            </p>
+            <p class="settings-foot">
+              <button id="btn-quit" class="link" data-i18n="quit"></button>
+            </p>
+          </div>
+
+          <div class="pane" data-pane="extensions" hidden>
+            <p class="hint" data-i18n="extIntro"></p>
+            <p class="notice warn" data-i18n="extTrust"></p>
+            <div id="ext-status" class="addon-status"></div>
+            <div id="ext-list" class="addon-list"></div>
+            <p class="hint"><button id="btn-ext-reload" class="link" type="button" data-i18n="reload"></button></p>
+          </div>
+
+          <div class="pane" data-pane="tools" hidden>
+            <p class="hint" data-i18n="mcpIntro"></p>
+            <div id="mcp-status" class="addon-status"></div>
+            <h3 data-i18n="mcpMine"></h3>
+            <div id="mcp-list" class="addon-list"></div>
+            <h3 data-i18n="mcpCatalog"></h3>
+            <div id="mcp-catalog" class="addon-list"></div>
+            <h3 data-i18n="mcpCustom"></h3>
+            <div id="mcp-form" class="mcp-form">
+              <label><span data-i18n="mcpName"></span>
+                <input id="mcp-name" spellcheck="false" data-i18n-placeholder="mcpNamePlaceholder" />
+              </label>
+              <label><span data-i18n="mcpKind"></span>
+                <select id="mcp-kind">
+                  <option value="command" data-i18n="mcpKindCommand"></option>
+                  <option value="http" data-i18n="mcpKindHttp"></option>
+                </select>
+              </label>
+              <div data-kind="command">
+                <label><span data-i18n="mcpCommand"></span>
+                  <input id="mcp-command" spellcheck="false" placeholder="npx" />
+                </label>
+                <label><span data-i18n="mcpArgs"></span> <small data-i18n="mcpArgsHint"></small>
+                  <input id="mcp-args" spellcheck="false" placeholder="-y @modelcontextprotocol/server-memory" />
+                </label>
+                <label><span data-i18n="mcpEnv"></span> <small data-i18n="mcpEnvHint"></small>
+                  <textarea id="mcp-env" rows="2" spellcheck="false" placeholder="API_KEY=…"></textarea>
+                </label>
+              </div>
+              <div data-kind="http" hidden>
+                <label><span data-i18n="mcpUrl"></span>
+                  <input id="mcp-url" spellcheck="false" placeholder="https://example.com/mcp" />
+                </label>
+                <label><span data-i18n="mcpHeaders"></span> <small data-i18n="mcpHeadersHint"></small>
+                  <textarea id="mcp-headers" rows="2" spellcheck="false" placeholder="Authorization: Bearer …"></textarea>
+                </label>
+              </div>
+              <p class="hint bad" id="mcp-form-error"></p>
+              <p><button id="btn-mcp-add" class="secondary" type="button" data-i18n="mcpAdd"></button></p>
+            </div>
+          </div>
+
+          <div class="pane" data-pane="photos" hidden>
+            <p class="hint" data-i18n="photosIntro"></p>
+            <p class="notice warn" data-i18n="photosPrivacy"></p>
+            <div id="photos-pane-body"></div>
+          </div>
+
+          <p class="settings-error" id="settings-error"></p>
+          <div class="settings-actions">
+            <button id="btn-settings-cancel" class="secondary" data-i18n="back"></button>
+            <button id="btn-settings-save" class="primary" data-i18n="save"></button>
+            <button id="btn-settings-done" class="primary" data-i18n="done" hidden></button>
+          </div>
+        </section>
+
+        <section id="setup" hidden>
+          <h2 data-i18n="setupTitle"></h2>
+          <p class="hint" data-i18n="setupIntro"></p>
+          <ol class="steps">
+            <li id="step-hw"><span class="st"></span><div class="body"><b data-i18n="stepHw"></b><div class="d"></div></div></li>
+            <li id="step-model"><span class="st"></span><div class="body"><b data-i18n="stepModel"></b><div class="d"></div>
+              <select id="setup-model" data-i18n-aria="stepModel"></select>
+              <p class="note" id="step-model-note"></p></div></li>
+            <li id="step-ollama"><span class="st"></span><div class="body"><b data-i18n="stepOllama"></b><div class="d"></div>
+              <progress max="1" hidden></progress></div></li>
+            <li id="step-pull"><span class="st"></span><div class="body"><b data-i18n="stepPull"></b><div class="d"></div>
+              <progress max="1" hidden></progress></div></li>
+          </ol>
+          <p class="settings-error" id="setup-error"></p>
+          <div class="settings-actions">
+            <button id="btn-setup-cancel" class="secondary" data-i18n="later"></button>
+            <button id="btn-setup-start" class="primary" data-i18n="setUp"></button>
+          </div>
+        </section>
+
+        <div id="attachments" hidden></div>
+        <footer id="composer">
+          <div id="composer-grip" data-i18n-tip="tipGrip" data-tip-pos="top-center"></div>
+          <button id="btn-attach" class="icon-btn attach" type="button" data-i18n-tip="tipAttach" data-i18n-aria="attach" data-tip-pos="top">📎</button>
+          <input id="file-attach" type="file" accept="image/*" multiple hidden />
+          <textarea id="input" rows="1" spellcheck="true"></textarea>
+          <button id="btn-send" class="send" data-tip-pos="top"></button>
+        </footer>
+      </section>
+
+      <div id="mascot-row">
+        <div id="badge" hidden></div>
+        <div id="mascot" class="mascot" role="button" tabindex="0" data-i18n-aria="mascotAria"></div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

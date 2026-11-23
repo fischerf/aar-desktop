@@ -1,0 +1,224 @@
+<!doctype html>
+<!-- Showcase stage: a light Windows 11-like desktop with the real Aar Desktop
+     frontend (fake Tauri backend) in an iframe at the bottom right.
+     Driven by scripts/showcase/capture.mjs; not part of the app. -->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<style>
+  /* same as the app, so the iframe stays transparent */
+  :root { --font: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; color-scheme: light dark; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100%; height: 100%; overflow: hidden; font-family: var(--font); }
+  body {
+    background:
+      radial-gradient(ellipse 60% 70% at 72% 40%, rgba(255, 214, 165, 0.75), transparent 70%),
+      radial-gradient(ellipse 55% 60% at 30% 65%, rgba(168, 199, 250, 0.9), transparent 70%),
+      radial-gradient(ellipse 40% 45% at 55% 75%, rgba(232, 190, 245, 0.7), transparent 70%),
+      linear-gradient(160deg, #eef3fb 0%, #e5ecf8 45%, #f6ecf3 100%);
+  }
+  body.dark {
+    background:
+      radial-gradient(ellipse 60% 70% at 72% 40%, rgba(180, 110, 40, 0.45), transparent 70%),
+      radial-gradient(ellipse 55% 60% at 30% 65%, rgba(40, 80, 160, 0.6), transparent 70%),
+      linear-gradient(160deg, #141a26 0%, #1b2030 50%, #241b26 100%);
+  }
+
+  /* taskbar */
+  .taskbar {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 48px;
+    background: rgba(243, 243, 243, 0.85); backdrop-filter: blur(20px);
+    border-top: 1px solid rgba(0, 0, 0, 0.08);
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+  }
+  .tb-icon {
+    width: 38px; height: 38px; border-radius: 6px; display: grid; place-items: center; font-size: 20px;
+  }
+  .tb-icon.active { background: rgba(255, 255, 255, 0.7); box-shadow: inset 0 -2px 0 #0067c0; }
+  .start { font-size: 0; }
+  .start i { display: grid; grid-template-columns: 9px 9px; gap: 2px; }
+  .start i b { width: 9px; height: 9px; background: #0078d4; border-radius: 1px; }
+  .tray {
+    position: absolute; right: 12px; top: 0; bottom: 0; display: flex; align-items: center; gap: 12px;
+    font-size: 12px; color: #1a1a1a;
+  }
+  .tray .clock { text-align: right; line-height: 1.25; }
+  .tray .aar { width: 18px; height: 18px; border-radius: 50%; background: radial-gradient(circle at 40% 35%, #fbbf24, #d97706); }
+
+  /* app windows */
+  .win {
+    position: absolute; background: #fff; border-radius: 8px; overflow: hidden;
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.18), 0 2px 6px rgba(0, 0, 0, 0.08);
+    border: 1px solid rgba(0, 0, 0, 0.08); display: none; flex-direction: column;
+  }
+  .win.on { display: flex; }
+  .titlebar {
+    height: 34px; display: flex; align-items: center; padding-left: 12px; font-size: 12px; color: #1a1a1a;
+    background: #f3f3f3; flex: none;
+  }
+  .titlebar .ico { margin-right: 8px; font-size: 14px; }
+  .titlebar .ctrl { margin-left: auto; display: flex; }
+  .titlebar .ctrl span { width: 44px; text-align: center; font-size: 12px; color: #333; }
+
+  /* Paint */
+  #paint { left: 40px; top: 40px; width: 520px; height: 520px; }
+  .ribbon {
+    height: 64px; background: #f9f9f9; border-bottom: 1px solid #e5e5e5; display: flex; align-items: center;
+    gap: 14px; padding: 0 14px; font-size: 11px; color: #444; flex: none;
+  }
+  .ribbon .tool { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 4px 6px; border-radius: 4px; }
+  .ribbon .tool.on { background: #dde9f7; }
+  .ribbon .tool b { font-size: 18px; font-weight: normal; }
+  .swatches { display: grid; grid-template-columns: repeat(6, 14px); gap: 3px; margin-left: auto; }
+  .swatches i { width: 14px; height: 14px; border-radius: 50%; border: 1px solid rgba(0, 0, 0, 0.15); }
+  .canvas-area { flex: 1; background: #e9edf3; padding: 18px; display: grid; place-items: center; }
+  .canvas-area svg { width: 100%; height: 100%; background: #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15); }
+  .layer { opacity: 0; transition: opacity 0.6s; }
+  .layer.on { opacity: 1; }
+
+  /* Explorer */
+  #explorer { left: 40px; top: 40px; width: 540px; height: 520px; }
+  .addr { height: 40px; display: flex; align-items: center; gap: 10px; padding: 0 12px; font-size: 12px; color: #333; border-bottom: 1px solid #eee; flex: none; }
+  .addr .path { flex: 1; background: #f6f6f6; border-radius: 4px; padding: 5px 10px; }
+  .files { flex: 1; display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; padding: 16px; align-content: start; }
+  .file { font-size: 11px; color: #222; text-align: center; padding: 6px; border-radius: 4px; }
+  .file.sel { background: #cce4f7; }
+  .file img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 3px; display: block; margin-bottom: 4px; }
+
+  /* PDF viewer */
+  #pdf { left: 60px; top: 40px; width: 500px; height: 560px; }
+  .pdf-bg { flex: 1; background: #525659; display: grid; place-items: start center; padding: 22px; overflow: hidden; }
+  .page { width: 400px; background: #fff; padding: 34px 36px; box-shadow: 0 2px 8px rgba(0,0,0,.4); font-size: 11px; color: #333; line-height: 1.5; }
+  .page h1 { font-size: 20px; color: #1f3a68; margin-bottom: 2px; }
+  .page .sub { color: #888; margin-bottom: 16px; }
+  .page h2 { font-size: 12px; color: #1f3a68; margin: 14px 0 6px; }
+  .bars { display: flex; align-items: flex-end; gap: 14px; height: 110px; border-bottom: 1px solid #ccc; padding: 0 10px; }
+  .bars i { flex: 1; background: linear-gradient(#5b8def, #2f5fc2); border-radius: 3px 3px 0 0; }
+  .bars i.q3 { background: linear-gradient(#ffb347, #d97706); }
+  .lbl { display: flex; gap: 14px; padding: 4px 10px 0; color: #777; }
+  .lbl span { flex: 1; text-align: center; }
+  .line { height: 7px; background: #e9ecf2; border-radius: 3px; margin: 6px 0; }
+
+  /* the widget */
+  #aar {
+    position: absolute; right: 14px; bottom: 54px; width: 400px; height: 640px; border: 0;
+    background: transparent;
+  }
+  #aar.collapsed { width: 150px; height: 150px; }
+
+  /* click marker */
+  .click { position: absolute; width: 34px; height: 34px; margin: -17px 0 0 -17px; border-radius: 50%;
+    border: 3px solid rgba(217, 119, 6, 0.85); pointer-events: none; animation: ping 0.6s ease-out forwards; z-index: 10; }
+  @keyframes ping { from { transform: scale(0.4); opacity: 1; } to { transform: scale(1.4); opacity: 0; } }
+</style>
+</head>
+<body>
+  <div class="win" id="paint">
+    <div class="titlebar"><span class="ico">🎨</span><span id="paint-title">Untitled - Paint</span><span class="ctrl"><span>—</span><span>☐</span><span>✕</span></span></div>
+    <div class="ribbon">
+      <div class="tool"><b>✏️</b><span id="t-pencil">Pencil</span></div>
+      <div class="tool on" id="brush"><b>🖌️</b><span id="t-brush">Brush</span></div>
+      <div class="tool"><b>🪣</b><span id="t-fill">Fill</span></div>
+      <div class="tool"><b>🔤</b><span id="t-text">Text</span></div>
+      <div class="swatches">
+        <i style="background:#000"></i><i style="background:#7f7f7f"></i><i style="background:#ed1c24"></i>
+        <i style="background:#ff7f27"></i><i style="background:#fff200"></i><i style="background:#22b14c"></i>
+        <i style="background:#00a2e8"></i><i style="background:#3f48cc"></i><i style="background:#a349a4"></i>
+        <i style="background:#fff"></i><i style="background:#ffc90e"></i><i style="background:#b5e61d"></i>
+      </div>
+    </div>
+    <div class="canvas-area">
+      <svg viewBox="0 0 480 360" preserveAspectRatio="none">
+        <defs>
+          <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#3b2a6b" /><stop offset="0.45" stop-color="#e2557a" /><stop offset="1" stop-color="#ffb347" />
+          </linearGradient>
+          <linearGradient id="sea" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#2d5fa8" /><stop offset="1" stop-color="#173563" />
+          </linearGradient>
+        </defs>
+        <g class="layer" id="l-sky"><rect width="480" height="230" fill="url(#sky)" /></g>
+        <g class="layer" id="l-sun"><circle cx="240" cy="228" r="58" fill="#ffd23f" /><circle cx="240" cy="228" r="78" fill="#ffd23f" opacity="0.25" /></g>
+        <g class="layer" id="l-sea">
+          <rect y="222" width="480" height="138" fill="url(#sea)" />
+          <path d="M150 248 h180 M175 266 h130 M200 284 h80 M220 300 h40" stroke="#ffd23f" stroke-width="5" stroke-linecap="round" opacity="0.75" />
+        </g>
+        <g class="layer" id="l-birds" stroke="#2b1b3f" stroke-width="3" fill="none" stroke-linecap="round">
+          <path d="M90 90 q10 -10 20 0 q10 -10 20 0" /><path d="M140 60 q8 -8 16 0 q8 -8 16 0" /><path d="M360 80 q10 -10 20 0 q10 -10 20 0" />
+        </g>
+      </svg>
+    </div>
+  </div>
+
+  <div class="win" id="explorer">
+    <div class="titlebar"><span class="ico">📁</span><span id="ex-title">Pictures</span><span class="ctrl"><span>—</span><span>☐</span><span>✕</span></span></div>
+    <div class="addr">← → ↑ <span class="path" id="ex-path">This PC › Pictures › 2026</span>🔍</div>
+    <div class="files" id="files"></div>
+  </div>
+
+  <div class="win" id="pdf">
+    <div class="titlebar"><span class="ico">📕</span><span id="pdf-title">Quarterly report Q3.pdf</span><span class="ctrl"><span>—</span><span>☐</span><span>✕</span></span></div>
+    <div class="pdf-bg"><div class="page">
+      <h1 id="pdf-h1">Quarterly Report Q3</h1><div class="sub" id="pdf-sub">Sales &amp; Operations · page 1 of 14</div>
+      <h2 id="pdf-rev">Revenue per quarter</h2>
+      <div class="bars"><i style="height:52%"></i><i style="height:61%"></i><i style="height:58%"></i><i class="q3" style="height:66%"></i></div>
+      <div class="lbl"><span>Q4</span><span>Q1</span><span>Q2</span><span>Q3</span></div>
+      <h2 id="pdf-high">Highlights</h2>
+      <div class="line" style="width:92%"></div><div class="line" style="width:84%"></div><div class="line" style="width:88%"></div>
+      <div class="line" style="width:61%"></div>
+      <h2 id="pdf-out">Outlook</h2>
+      <div class="line" style="width:90%"></div><div class="line" style="width:72%"></div>
+    </div></div>
+  </div>
+
+  <iframe id="aar" src="/index.html" allowtransparency="true"></iframe>
+
+  <div class="taskbar">
+    <div class="tb-icon start"><i><b></b><b></b><b></b><b></b></i></div>
+    <div class="tb-icon">🔍</div>
+    <div class="tb-icon" id="tb-explorer">📁</div>
+    <div class="tb-icon">🌐</div>
+    <div class="tb-icon" id="tb-paint">🎨</div>
+    <div class="tb-icon">📧</div>
+    <div class="tray"><span>⌃</span><span class="aar" title="Aar"></span><span>🔊</span>
+      <div class="clock"><span id="clock-time">10:42</span><br /><span id="clock-date">23.11.2026</span></div></div>
+  </div>
+
+<script>
+  // API for capture.mjs
+  window.stage = {
+    show(id, on = true) {
+      document.getElementById(id).classList.toggle("on", on);
+      document.getElementById("tb-" + id)?.classList.toggle("active", on);
+    },
+    paint(step) {
+      ["l-sky", "l-sun", "l-sea", "l-birds"].forEach((l, i) =>
+        document.getElementById(l).classList.toggle("on", i < step));
+    },
+    files(list, selected = []) {
+      const host = document.getElementById("files");
+      host.innerHTML = "";
+      for (const f of list) {
+        const d = document.createElement("div");
+        d.className = "file" + (selected.includes(f.name) ? " sel" : "");
+        d.innerHTML = `<img src="${f.src}" alt="" /><span></span>`;
+        d.querySelector("span").textContent = f.name;
+        host.appendChild(d);
+      }
+    },
+    widget(expanded) { document.getElementById("aar").classList.toggle("collapsed", !expanded); },
+    dark(on) { document.body.classList.toggle("dark", on); },
+    // window titles, labels, clock in the language of the scene: { elementId: text }
+    texts(map) { for (const [id, text] of Object.entries(map)) document.getElementById(id).textContent = text; },
+    click(x, y) {
+      const c = document.createElement("div");
+      c.className = "click";
+      c.style.left = x + "px";
+      c.style.top = y + "px";
+      document.body.appendChild(c);
+      setTimeout(() => c.remove(), 700);
+    },
+  };
+</script>
+</body>
+</html>
