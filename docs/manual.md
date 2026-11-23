@@ -25,7 +25,11 @@ see the [README](../README.md).
 
 ### Installing
 
-Download `Aar_<version>_x64-setup.exe` from the [Releases page](../../../releases/latest) and run it.
+> [!WARNING]
+> Aar Desktop is an early preview and will contain bugs. Use it only in a virtual machine or test environment
+> without productive or personal data.
+
+Download `Aar_<version>_x64-setup.exe` from the [Releases page](../../../releases) and run it.
 
 - The installer works **for your user account only** and does not need administrator rights.
   The program goes to `%LOCALAPPDATA%\Aar`.

@@ -17,6 +17,11 @@
 
 </div>
 
+> [!WARNING]
+> **Early preview.** Aar Desktop is in its first version and will contain bugs. An AI agent that operates programs
+> and writes files can make mistakes that are hard to undo – please use it **only in a virtual machine or test
+> environment without productive or personal data**, not on your everyday PC.
+
 ## What is Aar Desktop?
 
 Aar Desktop puts a small eagle mascot in the bottom-right corner of your screen. Click it – or press
@@ -62,8 +67,8 @@ a cloud provider such as Anthropic, OpenAI or Google Gemini instead.
 
 ## Installation
 
-1. **Download** the installer `Aar_<version>_x64-setup.exe` from the [Releases page](../../releases/latest).
-2. **Run it.** It installs for your user account only, needs no administrator rights and brings everything
+1. **Download** the installer `Aar_<version>_x64-setup.exe` from the [Releases page](../../releases).
+2. **Run it** – for now inside a virtual machine (see the warning above). It installs for your user account only, needs no administrator rights and brings everything
    it needs along – including the aar agent and its own Python. Nothing else has to be installed by hand.
 3. **Follow the setup assistant.** On the first start Aar checks your computer's memory and graphics card,
    recommends a suitable language model, installs Ollama quietly in the background and downloads the model
