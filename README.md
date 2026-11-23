@@ -113,7 +113,7 @@ so the agent can see and operate your programs. Learn more on the
 
 ## Author
 
-**Florian Fischer** — [Discord](https://discord.gg/xYJNHJV7Bh)
+**Florian Fischer**
 
 ## License
 
