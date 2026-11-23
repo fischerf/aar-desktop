@@ -40,6 +40,7 @@
     "targets": ["nsis"],
     "resources": { "../dist-py/python/": "python/" },
     "publisher": "Aar",
+    "licenseFile": "windows/license.txt",
     "category": "Productivity",
     "shortDescription": "Aar – dein Desktop-Assistent",
     "icon": [

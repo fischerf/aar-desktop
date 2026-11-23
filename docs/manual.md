@@ -31,6 +31,8 @@ see the [README](../README.md).
 
 Download `Aar_<version>_x64-setup.exe` from the [Releases page](../../../releases) and run it.
 
+- The installer first shows the **disclaimer and license** (Apache License 2.0). You use Aar Desktop at your
+  own risk; installation continues only after you accept.
 - The installer works **for your user account only** and does not need administrator rights.
   The program goes to `%LOCALAPPDATA%\Aar`.
 - It brings along **everything Aar needs**: the aar agent, its own Python 3.13 and all required libraries.

@@ -240,6 +240,9 @@ wsl -d Ubuntu-aarui -u root -- bash /mnt/b/Github_my/aar_ui/scripts/wsl/showcase
   content; the widget detects this (`reportSilentTurn`). MCP servers that fail to start are reported as an agent
   message *before* the `session/new` response, so the widget buffers updates for unknown sessions.
 - **Rust tests must not call `i18n::set_lang`** – the language is process-wide and tests run in parallel.
+- **The installer shows a license page** (`bundle.licenseFile` → `src-tauri/windows/license.txt`): the early
+  preview warning and disclaimer in English, German and Chinese, followed by the full Apache License text. If
+  `LICENSE` or the disclaimer changes, update this file too.
 - **Settings files written by PowerShell 5.1** start with a UTF-8 BOM; `Settings::parse` strips it.
 
 ---
