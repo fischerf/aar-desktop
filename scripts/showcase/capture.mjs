@@ -435,6 +435,8 @@ function scenes(lang) {
     }),
     "photos-settings": () => settings("photos", "photos-settings", async (page, app) => {
       await app.locator("#photos-pane-body .hint").first().waitFor();
+      // status lines incl. skipped tiny images + index buttons
+      await app.locator("#photos-pane-body .photo-actions").scrollIntoViewIfNeeded();
     }),
     setup, gif,
   };

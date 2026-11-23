@@ -2,7 +2,8 @@
 # Screenshots (1600x1200) + GIF of Aar Desktop for the project page, made with
 # the real frontend on a fake desktop (scripts/showcase), one set per language.
 # Output: dist/showcase/<lang>, then WebP + GIF into the page
-# (fischerf.github.io/aar-desktop/img/<lang>).
+# (fischerf.github.io/aar-desktop/img/<lang>) and the English GIF + one
+# screenshot into docs/img for the README.
 #
 #   wsl -d Ubuntu-aarui -u root -- bash /mnt/b/Github_my/aar_ui/scripts/wsl/showcase.sh [scene,scene] [en,de,zh]
 #
@@ -10,6 +11,7 @@
 #         photos-settings, setup, gif   (none given or "all" = all)
 # Languages: en, de, zh (default: all three)
 # Env: SHOWCASE_SITE=<img dir of the page>  ("" = do not copy into the page)
+#      SHOWCASE_README=<dir>  (default docs/img of the repo, "" = do not copy)
 set -euo pipefail
 SRC="${AAR_UI_SRC:-/mnt/b/Github_my/aar_ui}"
 WORK="$HOME/build/aar_ui"
@@ -91,3 +93,8 @@ for L in ${LANGS//,/ }; do
   fi
   ls -la "$OUT/$L"
 done
+README="${SHOWCASE_README-$SRC/docs/img}"
+if [[ -n "$README" && ",$LANGS," == *,en,* ]]; then
+  echo "==> README: $README"
+  "$PY" scripts/showcase/publish.py "$OUT/en" "$README" photo-search
+fi

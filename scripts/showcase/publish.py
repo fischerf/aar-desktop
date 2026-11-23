@@ -1,7 +1,9 @@
-"""Copy the showcase of one language into the project page: PNG scenes -> WebP
-(same 1600x1200), plus the GIF.
+"""Copy the showcase of one language into the project page (or the README):
+PNG scenes -> WebP (same 1600x1200), plus the GIF.
 
-    python publish.py <dist/showcase/<lang>> <site img dir>/<lang>
+    python publish.py <dist/showcase/<lang>> <site img dir>/<lang> [scene,scene]
+
+Without a scene list all SCENES are copied.
 """
 import shutil
 import sys
@@ -12,8 +14,9 @@ from PIL import Image
 SCENES = ["paint", "permission", "photo-search", "vision", "extensions", "tools", "photos-settings", "setup"]
 
 src, dst = Path(sys.argv[1]), Path(sys.argv[2])
+only = [s for s in (sys.argv[3] if len(sys.argv) > 3 else "").split(",") if s]
 dst.mkdir(parents=True, exist_ok=True)
-for name in SCENES:
+for name in only or SCENES:
     png = src / f"{name}.png"
     if not png.is_file():
         continue

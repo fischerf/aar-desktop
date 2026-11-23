@@ -9,6 +9,10 @@ changes anything. Made for office and end users who never open a terminal.
 Project page: <https://fischerf.github.io/aar-desktop/> (source: `B:\Github_my\fischerf.github.io\aar-desktop`,
 screenshots/GIF generated with [`scripts/showcase`](#website-regenerating-screenshots-and-gif)).
 
+![Aar paints a sunset in Paint after asking for permission](docs/img/aar-desktop.gif)
+
+![Photo search: Aar finds all photos with tables and shows them as thumbnails](docs/img/photo-search.webp)
+
 ```
 aar-desktop.exe (Tauri 2)                          aar (bundled runtime, Python 3.13)
  ├─ src/ (TypeScript, WebView2) ── invoke/events ─┐   python -m aar_desktop.boot acp
@@ -176,7 +180,9 @@ wsl -d Ubuntu-aarui -u root -- bash /mnt/b/Github_my/aar_ui/scripts/wsl/showcase
    and include them on all three pages (section *tour*).
 4. Publish the page: commit and push in the `fischerf.github.io` repo.
 
-`SHOWCASE_SITE=""` only produces the files in `dist\showcase`, without touching the website.
+`SHOWCASE_SITE=""` only produces the files in `dist\showcase`, without touching the website. When `en` is
+captured, the English GIF and `photo-search.webp` are also copied to `docs/img` for this README
+(`SHOWCASE_README=""` = do not copy).
 
 ## Structure
 
