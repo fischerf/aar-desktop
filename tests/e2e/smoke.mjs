@@ -262,6 +262,8 @@ async function run(colorScheme) {
   await page.waitForSelector(".msg.error >> text=läuft nicht");
   check(true, "preflight warns about unreachable local model server");
   check(await page.locator(".msg.error button.primary", { hasText: "Jetzt einrichten" }).count() >= 1, "offers setup for local server");
+  await page.waitForFunction(() => document.getElementById("status-text").textContent === "nicht bereit");
+  check(await page.locator("#conn-dot.warn").count() === 1, "status says not ready instead of ready");
   await page.screenshot({ path: `${OUT}/preflight-${colorScheme}.png` });
 
   // Reachable server but the profile's model is not installed.
@@ -272,6 +274,22 @@ async function run(colorScheme) {
   await page.waitForFunction(() => window.__shim.starts.at(-1).provider === "gemma");
   await page.waitForSelector(".msg.error >> text=gibt es auf dem Server nicht");
   check(true, "preflight warns about missing model");
+  await page.waitForFunction(() => document.getElementById("status-text").textContent === "nicht bereit");
+  check(true, "missing model -> not ready");
+
+  // Ollama installed but stopped -> started automatically, then ready.
+  await page.evaluate(() => { window.__shim.ollamaStopped = true; window.__shim.slow = 300; });
+  await page.click("#btn-settings");
+  await page.waitForSelector("#settings:not([hidden])");
+  await page.selectOption("#set-provider", "qwen3.8");
+  await page.click("#btn-settings-save");
+  await page.waitForFunction(() => window.__shim.starts.at(-1).provider === "qwen3.8");
+  await page.waitForFunction(() => document.getElementById("status-text").textContent === "starte Ollama…");
+  check(true, "status shows Ollama being started instead of ready");
+  await page.waitForSelector(".msg.system >> text=ich habe ihn gestartet");
+  await page.waitForFunction(() => document.getElementById("status-text").textContent === "bereit");
+  check(!(await page.evaluate(() => window.__shim.ollamaStopped)), "stopped Ollama started automatically, then ready");
+  await page.evaluate(() => { delete window.__shim.slow; });
 
   // Switch desktop control off -> restart, sessions without MCP servers.
   await page.click("#btn-settings");

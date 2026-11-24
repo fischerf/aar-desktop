@@ -281,11 +281,13 @@
           };
         case "setup_ollama_status":
           return window.__shim.ollama ?? {
-            installed: true, exe: "C:/ollama.exe", running: true, version: "0.34.2",
-            models: [...ollamaModels],
+            installed: true, exe: "C:/ollama.exe", running: !window.__shim.ollamaStopped, version: "0.34.2",
+            models: window.__shim.ollamaStopped ? [] : [...ollamaModels],
           };
-        case "setup_ollama_install":
         case "setup_ollama_start":
+          window.__shim.ollamaStopped = false;
+        // fallthrough
+        case "setup_ollama_install":
           for (const done of [0, 5e8, 1e9]) {
             emit("setup://progress", { phase: "download", message: "Lade Ollama herunter …", done, total: 1e9 });
             await sleep(window.__shim.slow ?? 30);
@@ -303,6 +305,8 @@
         case "setup_cancel":
           return null;
         case "check_endpoint":
+          if (window.__shim.ollamaStopped && args.url.includes("11434"))
+            return { reachable: false, message: "localhost:11434 ist nicht erreichbar (läuft der Server?)", models: [] };
           return args.url.includes("11435")
             ? { reachable: false, message: "127.0.0.1:11435 ist nicht erreichbar (läuft der Server?)", models: [] }
             : { reachable: true, message: "Ollama auf localhost:11434 erreichbar", models: ["qwen3.8:latest", "qwen3.5:4b"] };

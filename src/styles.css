@@ -110,6 +110,7 @@ header .spacer { flex: 1; }
 .dot.ready { background: var(--ok); }
 .dot.busy { background: var(--accent); animation: pulse 1s infinite; }
 .dot.offline { background: var(--danger); }
+.dot.warn { background: var(--accent); }
 @keyframes pulse { 50% { opacity: 0.35; } }
 
 button { font: inherit; color: inherit; }

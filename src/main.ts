@@ -16,7 +16,7 @@ import {
 import { Mascot, moodLabel, type Mood } from "./mascot";
 import { renderMarkdown } from "./markdown";
 import { describeTool, filePathsIn, forgetDesktop, learnFromTool, prettyJson, toolFileCandidates, toolOutputText } from "./tools";
-import { hasModel, SetupWizard } from "./setup";
+import { hasModel, SetupWizard, type OllamaStatus } from "./setup";
 import { AddonsView, splitArgs, type AddonSettings } from "./addons";
 import { photoResultCard, PhotosView } from "./photos";
 import { applyStatic, lang, LANG_NAMES, LANGS, locale, onLangChange, resolveLang, setLang, strings } from "./i18n";
@@ -131,6 +131,11 @@ const t = strings({
     mascotAria: "Aar – klicken zum Öffnen, ziehen zum Verschieben",
     // dynamic
     connecting: "verbinde…",
+    checkingModel: "prüfe Sprachmodell…",
+    startingOllama: "starte Ollama…",
+    notReady: "nicht bereit",
+    ollamaStarted: "Der lokale Modell-Server (Ollama) lief nicht – ich habe ihn gestartet.",
+    ollamaStartFailed: "Der lokale Modell-Server (Ollama) ist installiert, ließ sich aber nicht starten. Ich kann ihn neu einrichten.",
     cancelling: "breche ab…",
     agentEnded: "Der Agent wurde beendet.",
     agentCrashed: "Der Agent ist abgestürzt (Code {code}).",
@@ -308,6 +313,11 @@ const t = strings({
     tipGrip: "Drag: make the input bigger/smaller · double-click: reset",
     mascotAria: "Aar – click to open, drag to move",
     connecting: "connecting…",
+    checkingModel: "checking language model…",
+    startingOllama: "starting Ollama…",
+    notReady: "not ready",
+    ollamaStarted: "The local model server (Ollama) was not running – I started it.",
+    ollamaStartFailed: "The local model server (Ollama) is installed but could not be started. I can set it up again.",
     cancelling: "cancelling…",
     agentEnded: "The agent has stopped.",
     agentCrashed: "The agent crashed (code {code}).",
@@ -485,6 +495,11 @@ const t = strings({
     tipGrip: "拖动：调整输入框大小 · 双击：恢复",
     mascotAria: "Aar – 点击打开，拖动移动",
     connecting: "连接中…",
+    checkingModel: "正在检查语言模型…",
+    startingOllama: "正在启动 Ollama…",
+    notReady: "未就绪",
+    ollamaStarted: "本地模型服务器（Ollama）没有运行 – 我已经启动了它。",
+    ollamaStartFailed: "本地模型服务器（Ollama）已安装，但无法启动。我可以重新设置它。",
     cancelling: "正在取消…",
     agentEnded: "代理已停止。",
     agentCrashed: "代理崩溃了（代码 {code}）。",
@@ -644,6 +659,12 @@ let early: Array<{ sid: string; update: SessionUpdate }> | null = null;
 /** Context of the session: size reported by aar (usage_update) or configured,
  * used = prompt tokens of the last model call (null = not known yet). */
 const ctx = { size: 0, used: null as number | null };
+/** Language model state after connecting: the status only says "ready" once the
+ * preflight found the model server and model. `check` = what is being checked
+ * right now (shown as status), `problem` = preflight or a turn found it broken. */
+const llm = { check: "", problem: false };
+/** Counts connects, so a preflight of an earlier connection does not touch the status. */
+let connectGen = 0;
 
 const mascot = new Mascot($("mascot"), (m) => refreshStatus(m));
 
@@ -679,6 +700,8 @@ async function connect(resume = true) {
   updateComposer();
   mascot.set("offline");
   setStatus(t("connecting"), "busy");
+  llm.check = "";
+  llm.problem = false;
   early = [];
   try {
     await client.start();
@@ -704,9 +727,22 @@ async function connect(resume = true) {
     flushEarly();
     finishStreaming();
     localStorage.setItem(LAST_SESSION_KEY, sessionId);
+    llm.check = t("checkingModel");
+    llm.problem = false;
     connected = true;
     mascot.set("idle");
-    void preflight();
+    const gen = ++connectGen;
+    const mine = () => gen === connectGen && connected;
+    void preflight((text) => {
+      if (!mine()) return;
+      llm.check = text;
+      refreshStatus(mascot.current);
+    }).then((ok) => {
+      if (!mine()) return;
+      llm.check = "";
+      llm.problem = !ok;
+      refreshStatus(mascot.current);
+    });
   } catch (e) {
     mascot.set("offline");
     const stderr = await invoke<string>("agent_stderr").catch(() => "");
@@ -727,8 +763,10 @@ function flushEarly() {
 }
 
 /** aar only notices an unreachable model server on the first prompt (and then
- * stays silent), so check the configured endpoint right after connecting. */
-async function preflight() {
+ * stays silent), so check the configured endpoint right after connecting.
+ * Starts an installed but stopped local Ollama. Resolves to false when the
+ * language model is not usable (a card explains why). */
+async function preflight(status: (text: string) => void): Promise<boolean> {
   try {
     const s = await invoke<Settings>("get_settings");
     const info = await invoke<AarConfigInfo>("aar_config_info", { configPath: null });
@@ -743,7 +781,7 @@ async function preflight() {
     if (!info.found && !s.provider && !s.baseUrl) {
       addSystem(t("welcomeSetup"));
       void openSetup();
-      return;
+      return false;
     }
     // Cloud provider chosen in the settings (not a profile): is the key there and valid?
     if (!profile && isCloud(s.provider)) {
@@ -753,42 +791,66 @@ async function preflight() {
       if (!key.trim()) {
         addError(t("apiKeyMissing", { name }), "", toSettings);
         mascot.set("error", 5000);
-        return;
+        return false;
       }
       const r = await invoke<EndpointCheck>("check_provider", { kind: s.provider, baseUrl: s.baseUrl, apiKey: key });
       if (!r.reachable) {
         addError(t("providerProblem", { name }), r.message, toSettings);
         mascot.set("error", 5000);
-      } else if (s.model && r.models.length && !r.models.includes(s.model)) {
-        addError(t("modelMissing", { model: s.model }), t("availableModels", { models: r.models.join(", ") }), toSettings);
+        return false;
       }
-      return;
+      if (s.model && r.models.length && !r.models.includes(s.model)) {
+        addError(t("modelMissing", { model: s.model }), t("availableModels", { models: r.models.join(", ") }), toSettings);
+        return false;
+      }
+      return true;
     }
     const url = s.baseUrl || profile?.baseUrl;
-    if (!url) return;
-    const r = await invoke<EndpointCheck>("check_endpoint", { url });
+    if (!url) return true;
+    let r = await invoke<EndpointCheck>("check_endpoint", { url });
     const model = s.model || profile?.model || "";
     const local = /^(https?:\/\/)?(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/i.test(url);
     const setupAction: ErrorAction[] = local
       ? [{ label: t("setupNow"), primary: true, run: () => void openSetup() }]
       : [];
+    // Ollama installed but not running (e.g. its tray app was closed): start it.
+    let startError = "";
+    if (!r.reachable && local && /:11434(\/|$)/.test(url)) {
+      const st = await invoke<OllamaStatus>("setup_ollama_status").catch(() => null);
+      if (st?.installed && !st.running) {
+        status(t("startingOllama"));
+        try {
+          await invoke<OllamaStatus>("setup_ollama_start");
+          r = await invoke<EndpointCheck>("check_endpoint", { url });
+          if (r.reachable) addSystem(t("ollamaStarted"));
+        } catch (e) {
+          startError = errText(e);
+        }
+        status(t("checkingModel"));
+      }
+    }
     if (!r.reachable) {
       addError(
-        local ? t("ollamaDown") : t("endpointDown", { url }),
-        r.message,
+        startError ? t("ollamaStartFailed") : local ? t("ollamaDown") : t("endpointDown", { url }),
+        startError ? `${startError}\n${r.message}` : r.message,
         setupAction,
       );
       mascot.set("error", 5000);
-    } else if (model && r.models.length && !hasModel(r.models, model)) {
+      return false;
+    }
+    if (model && r.models.length && !hasModel(r.models, model)) {
       addError(
         t(local ? "modelMissingLocal" : "modelMissing", { model }),
         `${r.message}\n${t("availableModels", { models: r.models.join(", ") })}`,
         setupAction,
       );
       mascot.set("error", 5000);
+      return false;
     }
+    return true;
   } catch (e) {
     console.warn("preflight failed", e);
+    return true;
   }
 }
 
@@ -862,6 +924,7 @@ async function send() {
           await reportSilentTurn(stderrBefore);
           break;
         }
+        llm.problem = false;
         mascot.set("happy", 2500);
         if (!expanded) badge.hidden = false;
         void showTurnFiles(turnStart, firstOfTurn);
@@ -902,10 +965,13 @@ async function reportSilentTurn(stderrBefore: string) {
   const lines = fresh.split("\n").filter((l) => /error|warn|fail|exception|refused/i.test(l));
   const details = lines.slice(-8).join("\n");
   const providerDown = /connect|connection|refused|timed? ?out|unreachable/i.test(details);
+  // Ollama: HTTP 404 {"error":"model 'gemma4:e4b' not found"}
+  const missing = /model ['"]?([^'"\s]+)['"]? not found/i.exec(details)?.[1];
   addError(
-    providerDown ? t("noAnswerProvider") : t("noAnswer"),
+    missing ? t("modelMissing", { model: missing }) : providerDown ? t("noAnswerProvider") : t("noAnswer"),
     details,
   );
+  llm.problem = true;
   mascot.set("error", 5000);
 }
 
@@ -1357,7 +1423,7 @@ function renderContext() {
   el.setAttribute("aria-valuenow", String(used ?? 0));
 }
 
-function setStatus(text: string, dot: "ready" | "busy" | "offline") {
+function setStatus(text: string, dot: "ready" | "busy" | "offline" | "warn") {
   statusText.textContent = text;
   connDot.className = `dot ${dot}`;
 }
@@ -1365,7 +1431,10 @@ function setStatus(text: string, dot: "ready" | "busy" | "offline") {
 function refreshStatus(m: Mood) {
   if (connecting) return;
   if (!connected) return setStatus(moodLabel("offline"), "offline");
-  setStatus(moodLabel(m), busy ? "busy" : "ready");
+  if (!busy && llm.check) return setStatus(llm.check, "busy");
+  // Only claim "ready" when the language model works.
+  if (!busy && llm.problem && (m === "idle" || m === "sleeping")) return setStatus(t("notReady"), "warn");
+  setStatus(moodLabel(m), busy ? "busy" : llm.problem ? "warn" : "ready");
 }
 
 function updateComposer() {
