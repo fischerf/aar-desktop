@@ -232,9 +232,10 @@ pub fn ollama_start(report: Reporter) -> Result<OllamaStatus, String> {
     }
     emit(report, "start", tr("Starte Ollama …", "Starting Ollama …", "正在启动 Ollama …"), 0, 0);
     // Prefer the tray app (keeps running, autostarts with Windows); else the bare server.
+    // `--hide`: only the tray icon, without opening Ollama's chat window.
     let tray = ollama_dir().map(|d| d.join("ollama app.exe")).filter(|p| p.is_file());
     match (tray, ollama_exe()) {
-        (Some(t), _) => spawn_hidden(&t, &[]),
+        (Some(t), _) => spawn_hidden(&t, &["--hide"]),
         (None, Some(exe)) => spawn_hidden(&exe, &["serve"]),
         (None, None) => {
             return Err(tr("Ollama ist nicht installiert", "Ollama is not installed", "尚未安装 Ollama").into())
