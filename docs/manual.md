@@ -94,7 +94,11 @@ again simply brings up the running one.
 ### Chatting
 
 Type your request into the input field and press **Enter** (**Shift+Enter** starts a new line). You can drag
-the small handle above the input field to make it bigger.
+the small handle above the input field to make it bigger. To speak instead of typing, press **Win+H** – Windows
+dictation writes into the input field.
+
+A new conversation shows a few **suggestions** (for example *Today's news* or *Write an invitation*). Click one
+to send it right away – a good way to find out what Aar can do.
 
 While Aar works, you see:
 
@@ -107,6 +111,13 @@ While Aar works, you see:
 
 The red stop button cancels the current task. The **＋** button in the header starts a new conversation.
 When you start Aar, it continues the last conversation.
+
+**Earlier conversations:** the **☰** button in the header lists your saved conversations, newest first, each
+with its first question. Click one to continue it. The 🗑 button deletes a conversation (click twice – the first
+click asks *Really delete?*).
+
+**Notifications:** if Aar needs your permission or finishes a longer task (over 20 seconds) while you are
+working in another program, Windows shows a notification. Nothing is shown while you are looking at Aar.
 
 ### The context indicator
 
@@ -124,7 +135,15 @@ run a command, a **permission card** appears:
 
 - **Allow** – do it this one time.
 - **Deny** – do not do it; Aar will look for another way or ask you.
-- **Always allow** – allow this kind of action for the rest of the conversation.
+- **Allow for this conversation** – Aar may do this kind of action (e.g. *Click*) without asking until you
+  start a new conversation.
+- **Always allow** – Aar may do this kind of action without asking from now on, also in later conversations.
+  Commands, scripts and deleting are never allowed permanently – for them only *Allow for this conversation*
+  is offered.
+
+When Aar does something without asking because you allowed it, a small line *Allowed without asking* appears
+below the action, with *Revoke* to take the permission back. All permissions are listed under ⚙ → *General* →
+*Permissions*, each with *Revoke*, plus *Revoke all*.
 
 Under ⚙ → *General* → *This conversation* you can choose how Aar works in the current conversation:
 
@@ -271,6 +290,19 @@ The setup assistant recommends one of these models:
 Larger models handle complex desktop tasks much more reliably. How fast a model answers depends strongly on
 your hardware; the figures above are guidelines, not guarantees.
 
+We tested the four start suggestions of the empty chat with each model:
+
+| Suggestion | Gemma 4 (E4B) | Qwen 3.5 (4B) | Qwen 3.8 (27B) |
+|---|---|---|---|
+| 📰 Today's news | ✅ | ✅ | ✅ |
+| 🎨 Paint a picture | sometimes | sometimes | ✅ |
+| 📁 Look at my downloads | ✅ | ✅ | ✅ |
+| ✉️ Write an invitation | ✅ | ✅ | ✅ |
+
+The small models are fine for looking things up, listing files and writing texts. For operating programs such as
+Paint, use Qwen 3.8. With a graphics card, a request takes from a few seconds to a few minutes. Without one, the small
+models take about 4 to 30 times longer.
+
 ### Using a cloud provider
 
 Under ⚙ → *General* → *Language model connection* → *Profile / provider* you can choose:
@@ -298,6 +330,7 @@ Open the settings with ⚙ in the header of the chat bubble.
 |---|---|
 | This conversation | Working mode, model and reasoning effort for the current conversation |
 | Abilities | *Operate programs on this PC*; *Start when signing in to Windows* |
+| Permissions | What Aar may do without asking (always / this conversation), each with *Revoke*; *Revoke all* |
 | Language | Display language: automatic (same as Windows), English, German or Simplified Chinese |
 | Language model connection | Profile / provider, API key, server address, model, *Test*, *Setup assistant …* |
 | Advanced | aar configuration file, agent program, arguments, working folder, keyboard shortcut |
@@ -319,6 +352,7 @@ The settings are saved in `%APPDATA%\de.aar.ui\settings.json`.
 |---|---|
 | The program | `%LOCALAPPDATA%\Aar` |
 | Settings | `%APPDATA%\de.aar.ui\settings.json` |
+| Your own instructions for Aar (optional) | `%APPDATA%\de.aar.ui\rules.md` – plain text, e.g. "Address me formally" or "Save documents in D:\Office"; used from the next start |
 | Conversations | `<working folder>\.agent\sessions` (by default in your user folder) |
 | Log (warnings and errors) | `%LOCALAPPDATA%\de.aar.ui\logs\aar.log` |
 | Extensions | `%LOCALAPPDATA%\de.aar.ui\extensions` |
@@ -361,11 +395,14 @@ written to `%LOCALAPPDATA%\de.aar.ui\helpers` when required.
 ## 13. Troubleshooting
 
 **Aar does not answer or says the language model cannot be reached.**
-Check that Ollama is running (it has its own icon in the notification area) or open the setup assistant again.
-For cloud providers, check the API key with *Test* under ⚙ → *Language model connection*.
+After starting, Aar checks the language model first (*checking language model…*) and only then says *ready*;
+if something is wrong, the header shows *not ready* and a card explains why. If Ollama is installed but not
+running, Aar starts it by itself (only its icon appears in the notification area). Otherwise open the setup
+assistant again. For cloud providers, check the API key with *Test* under ⚙ → *Language model connection*.
 
 **"The model … does not exist on the server."**
-Choose another model under ⚙ → *Language model connection*, or let Aar download a suitable one.
+The card offers *Use … instead* for models that are on the server, and for a local Ollama *Download …* with
+a progress bar. You can also choose another model under ⚙ → *Language model connection*.
 
 **Aar stopped in the middle of a task.**
 It may have reached its step limit. Write *continue* and it carries on.

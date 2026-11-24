@@ -44,6 +44,17 @@ aar-desktop.exe (Tauri 2)                          aar (bundled runtime, Python 
   in `i18n.rs` (tray menu, error messages). New texts always need all three languages and should be written for
   non-technical users.
 
+### System prompt (desktop rules)
+
+aar builds its system prompt from layers (`agent/core/config.py`): built-in base (OS, folder, date, shell),
+tool guidelines, the instructions of MCP servers (e.g. the Windows desktop server), `~/.aar/rules.md`, extra
+rules, project rules. The CLI's `~/.aar/rules.md` (copied by `aar init`) is a coding-agent template, so the app
+switches it off with `AAR_NO_GLOBAL_RULES=1` and passes its own rules in `AAR_EXTRA_RULES` (aar ≥ develop
+e8713d3): `src-tauri/rules/desktop.md` – who Aar is for office users, how the permission cards work, the
+user's real folders (`SHGetKnownFolderPath`, e.g. a Desktop in OneDrive), the UI language, how to use Edge for
+the internet. `rules.rs` fills it in at every agent start and writes it to
+`%LOCALAPPDATA%\de.aar.ui\rules\desktop.md`; a user's own `%APPDATA%\de.aar.ui\rules.md` is added after it.
+
 ### Language model providers
 
 The user can pick a profile from the aar configuration or a provider type (`ollama`, `anthropic`, `openai`,
@@ -139,7 +150,48 @@ powershell -ExecutionPolicy Bypass -File scripts\sandbox\run.ps1 [-Full] [-KeepO
 
 # Drive the real widget in the Sandbox with UI Automation (LLM = the host's Ollama)
 powershell -ExecutionPolicy Bypass -File scripts\sandbox\desktop.ps1 -Mode widget -SkipPaint
+
+# Click the four start suggestions of the empty chat and check the outcome on the machine;
+# -Cpu runs the model on the processor only (num_gpu 0), without it Ollama uses the GPU
+powershell -ExecutionPolicy Bypass -File scripts\sandbox\desktop.ps1 -Mode widget -Tasks sug-news,sug-paint,sug-downloads,sug-letter -Model qwen3.5:4b [-Cpu]
 ```
+
+The host's Ollama detects GPUs only when it starts. If it started without one, it silently runs everything on the
+processor. The Sandbox log therefore ends with `LLM loaded: <model> size=… on GPU=… GB`; check it after GPU runs.
+
+### Start suggestions with the recommended models
+
+Result of the last run (2026-11-24, Aar 0.1.1, aar `develop` e2ae7a1, host Ollama on an AMD Radeon RX 7900 XTX or
+on the processor only). Each suggestion is clicked in the real widget and every permission card is allowed. The
+outcome is checked on the machine:
+
+- **News:** Edge was used and the answer has more than 300 characters.
+- **Paint:** more than 5 % of the canvas is painted (pixel check on a screenshot).
+- **Downloads:** all seven sample files are untouched and at least three are named in the answer.
+- **Invitation:** a new file on the Desktop and a file card in the chat.
+
+| Suggestion | gemma4 E4B GPU | gemma4 E4B CPU | qwen3.5 4B GPU | qwen3.5 4B CPU | qwen3.8 27B GPU |
+|---|---|---|---|---|---|
+| 📰 Today's news | ✅ 1 min | ✅ 4 min | ✅ 1 min | ✅ 9 min | ✅ 2 min |
+| 🎨 Paint a picture | ❌ 0 % | ❌ 1 % | ✅ 28 % | ❌ 0 % | ✅ 100 %, 8 min |
+| 📁 Look at my downloads | ✅ 12 s | ✅ 1.5 min | ✅ 17 s | ✅ 2 min | ✅ 11 s |
+| ✉️ Write an invitation | ✅ 8 s | ✅ 1 min | ✅ 5 s | ✅ 1 min | ✅ 17 s |
+
+- **Large model:** qwen3.8 solves all four. On the processor it is far too slow (about 30 minutes for the news task),
+  so it is tested on the GPU only.
+- **Small models and Paint:** Paint is luck for the small models. In the previous run gemma4 passed on the processor
+  and qwen3.5 failed on the GPU. They select tools, then drag outside the canvas or stop. gemma4 sometimes claims
+  success anyway. The other three suggestions work with every model; on the processor they take about 4 to 30
+  times longer, depending on the task.
+- **Fixes found by these runs:**
+  - The Windows MCP server matches window titles without invisible characters, because Edge puts a U+200B in its
+    title.
+  - aar continues when a model stops in the middle of its reasoning.
+  - `click_at` and `drag` without an element say that positions refer to the whole window.
+  - The desktop rules ask for full paths: the phrase "my desktop" in an earlier version was used literally as a
+    folder name.
+
+Results, screenshots and session files are under `E:\Windows_Sandbox\desktop\results\<model>-gpu|cpu`.
 
 Only one Windows Sandbox can run at a time; the scripts share a mutex. Starting a Sandbox also interrupts running
 WSL sessions, so never run WSL jobs and the Sandbox in parallel.
@@ -203,6 +255,8 @@ wsl -d Ubuntu-aarui -u root -- bash /mnt/b/Github_my/aar_ui/scripts/wsl/showcase
 | `src/addons.ts` | Extensions (registry, warnings) and tool servers (catalog, dialogs) |
 | `src/photos.ts` | Photo search: settings tab, result card with thumbnails |
 | `src/setup.ts` | Setup assistant and model catalog |
+| `src/permissions.ts` | Permission grants (this conversation / always), risky tools, the list in the settings |
+| `src/history.ts`, `src-tauri/src/sessions.rs` | Conversation list: read saved aar sessions, continue, delete |
 | `src/tools.ts`, `src/markdown.ts` | Tool calls in plain language, safe Markdown renderer (escapes first) |
 | `src/mascot.ts`, `src/styles.css` | Mascot SVG and its moods, Fluent styling in light and dark |
 | `src/i18n.ts` | Languages de/en/zh |

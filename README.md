@@ -85,8 +85,10 @@ it, use *Settings → Apps* in Windows like for any other program.
 
 - **Operates programs for you** – opens apps, clicks buttons, types text and reads what is on the screen,
   using Windows UI Automation.
-- **Always asks first** – every change appears as a card with *Allow*, *Deny* or *Always allow*. You can
+- **Always asks first** – every change appears as a card with *Allow* or *Deny*; you can also allow an action
+  for the conversation or permanently (never for commands or deleting) and revoke it any time under ⚙. You can
   also choose *Ask first*, *Work without asking* or *Read only* per conversation.
+- **Earlier conversations** – continue or delete saved conversations from the list in the header.
 - **Photo search** – describes the photos in folders you choose, once and locally, so you can later find
   them by content ("photos with a dog", "pictures from the beach").
 - **Images in the chat** – attach, drag or paste a picture and ask about it.
