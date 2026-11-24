@@ -22,6 +22,22 @@ WORK="${WORK:-$HOME/build/aar_ui}"
 OUT="$WORK/dist-py/python"
 CACHE="$HOME/.cache/aar-ui"
 mkdir -p "$CACHE"
+# pip runs as root in the build VM, but only installs into the bundle dir.
+export PIP_ROOT_USER_ACTION=ignore
+
+# pip install of Windows wheels into the bundle's site-packages. `--target` into
+# a non-empty dir skips existing top-level dirs (bin, __pycache__) with a
+# warning, so install into a fresh dir and merge (existing files win, as before).
+pip_win() {
+  local tmp
+  tmp="$(mktemp -d)"
+  python3 -m pip install -q --disable-pip-version-check \
+    --target "$tmp" \
+    --platform win_amd64 --python-version "$PY_TAG" --implementation cp --abi "cp$PY_NODOT" \
+    --only-binary=:all: "$@"
+  rsync -a --ignore-existing "$tmp/" "$OUT/Lib/site-packages/"
+  rm -rf "$tmp"
+}
 
 echo "==> embeddable Python $PY_VERSION"
 ZIP="$CACHE/python-$PY_VERSION-embed-amd64.zip"
@@ -51,21 +67,15 @@ rm -f "$(cd "$(dirname "$0")/../.." && pwd)"/dist/aar_agent-*.whl
 cp "$WHEEL" "$(cd "$(dirname "$0")/../.." && pwd)/dist/"
 
 echo "==> dependencies (win_amd64, cp$PY_NODOT)"
-python3 -m pip install -q --disable-pip-version-check \
-  --target "$OUT/Lib/site-packages" \
-  --platform win_amd64 --python-version "$PY_TAG" --implementation cp --abi "cp$PY_NODOT" \
-  --only-binary=:all: \
-  "${WHEEL}[${AAR_EXTRAS}]" pip hatchling pillow pillow-heif
+pip_win "${WHEEL}[${AAR_EXTRAS}]" pip hatchling pillow pillow-heif
 # pip + hatchling: Aar Desktop installs extensions (built from the registry
 # sources with hatchling, without build isolation) and MCP servers at runtime.
 # pillow (+ HEIC from phones): photo search (aar_desktop.photos).
 
 # Optional extra requirements (e.g. Windows desktop automation for the MCP server).
 if [[ -n "${EXTRA_REQUIREMENTS:-}" ]]; then
-  python3 -m pip install -q --disable-pip-version-check \
-    --target "$OUT/Lib/site-packages" \
-    --platform win_amd64 --python-version "$PY_TAG" --implementation cp --abi "cp$PY_NODOT" \
-    --only-binary=:all: $EXTRA_REQUIREMENTS
+  # shellcheck disable=SC2086
+  pip_win $EXTRA_REQUIREMENTS
 fi
 
 # pip evaluated environment markers for Linux, so Windows-only dependencies
@@ -75,10 +85,7 @@ for round in 1 2 3; do
   [[ -z "$MISSING" ]] && break
   echo "==> Windows-only dependencies (round $round): $(echo $MISSING | tr '\n' ' ')"
   # shellcheck disable=SC2086
-  python3 -m pip install -q --disable-pip-version-check \
-    --target "$OUT/Lib/site-packages" \
-    --platform win_amd64 --python-version "$PY_TAG" --implementation cp --abi "cp$PY_NODOT" \
-    --only-binary=:all: $MISSING
+  pip_win $MISSING
 done
 
 # MCP servers shipped with aar live in tools/, outside the wheel: copy the
