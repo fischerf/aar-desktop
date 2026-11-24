@@ -11,6 +11,9 @@
 #   powershell -ExecutionPolicy Bypass -File scripts\sandbox\desktop.ps1 -Mode widget -SkipPaint -Tasks all  # the real widget, driven like a user
 #   powershell -ExecutionPolicy Bypass -File scripts\sandbox\desktop.ps1 -Mode edge-probe -SkipPaint  # Edge via MCP, no LLM
 #
+# The host's Ollama runs the model on its GPU; -Cpu asks it for processor only
+# (num_gpu 0). qwen3.8 is too slow on the processor - test it with the GPU only.
+#
 # -AarSrc: aar checkout whose tools\windows_mcp and agent\extensions\mcp.py replace
 # the bundled ones (iterate without rebuilding the installer); "" keeps the bundle.
 # One-time Paint setup (host, read-only copy of installed packages):
@@ -27,7 +30,8 @@ param(
   [string]$AarSrc = "",
   [int]$TimeoutMinutes = 120,
   [switch]$SkipPaint,
-  [switch]$KeepOpen
+  [switch]$KeepOpen,
+  [switch]$Cpu
 )
 $ErrorActionPreference = "Stop"
 $repo = Resolve-Path "$PSScriptRoot\..\.."
@@ -44,7 +48,7 @@ if ($AarSrc) {
   robocopy "$AarSrc\tools\windows_mcp" "$in\override\windows_mcp" /E /XD __pycache__ /NFL /NDL /NJH /NJS | Out-Null
   Copy-Item "$AarSrc\agent\extensions\mcp.py" "$in\override\aar_mcp.py"
 }
-@{ mode = $Mode; tasks = $Tasks; model = $Model; numCtx = $NumCtx; llmUrl = $LlmUrl } | ConvertTo-Json | Set-Content "$in\params.json" -Encoding UTF8
+@{ mode = $Mode; tasks = $Tasks; model = $Model; numCtx = $NumCtx; llmUrl = $LlmUrl; cpu = [bool]$Cpu } | ConvertTo-Json | Set-Content "$in\params.json" -Encoding UTF8
 
 $paintMap = if ($SkipPaint) { "" } else { "<MappedFolder><HostFolder>$pkgs</HostFolder><SandboxFolder>C:\paint-pkgs</SandboxFolder><ReadOnly>true</ReadOnly></MappedFolder>" }
 $config = @"

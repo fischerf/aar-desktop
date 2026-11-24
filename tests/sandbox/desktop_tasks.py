@@ -25,6 +25,8 @@ from pathlib import Path
 OUT, URL, MODEL = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
 SELECTED = sys.argv[4] if len(sys.argv) > 4 else "all"
 NUM_CTX = int(sys.argv[5]) if len(sys.argv) > 5 else 32768
+# Further Ollama options from desktop_inside.ps1, e.g. {"num_gpu": 0} for -Cpu.
+LLM_EXTRA = {**json.loads(os.environ.get("AAR_TEST_LLM_EXTRA") or "{}"), "num_ctx": NUM_CTX}
 HOME = Path.home()
 
 
@@ -190,9 +192,9 @@ def main() -> int:
     cfg = HOME / ".aar" / "config.json"
     cfg.parent.mkdir(exist_ok=True)
     cfg.write_text(json.dumps({"provider": {"name": "ollama", "model": MODEL, "base_url": URL,
-                                            "extra": {"num_ctx": NUM_CTX}}}), encoding="utf-8")
+                                            "extra": LLM_EXTRA}}), encoding="utf-8")
     names = list(TASKS) if SELECTED == "all" else SELECTED.split(",")
-    log(f"model {MODEL} via {URL}, num_ctx={NUM_CTX}, tasks: {', '.join(names)}")
+    log(f"model {MODEL} via {URL}, options={LLM_EXTRA}, tasks: {', '.join(names)}")
     results = []
     for name in names:
         results.append(run(name, TASKS[name]))

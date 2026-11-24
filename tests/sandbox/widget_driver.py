@@ -28,7 +28,7 @@ from windows_mcp import uia
 
 OUT, EXE = Path(sys.argv[1]), sys.argv[2]
 SELECTED = sys.argv[3] if len(sys.argv) > 3 else "all"
-TURN_TIMEOUT = 1500
+TURN_TIMEOUT = 1800
 
 
 def log(msg: str) -> None:
@@ -47,6 +47,9 @@ class Task:
     prompt: str
     check: Callable[[str], tuple[bool, str]]
     window: str = "msedge.exe"
+    # Start suggestion to click instead of typing the prompt (its button text).
+    chip: str = ""
+    reset: Callable[[], None] | None = None
 
 
 def check_wiki(answer: str) -> tuple[bool, str]:
@@ -104,7 +107,70 @@ def check_date(answer: str) -> tuple[bool, str]:
     return any(f in answer for f in forms), f"expected one of {sorted(forms)}"
 
 
+# --- start suggestions (the chips in an empty conversation) --------------------
+
+DOWNLOADS = HOME / "Downloads"
+SAMPLE_DOWNLOADS = ["Rechnung_Maerz.pdf", "Rechnung_April.pdf", "Urlaub_001.jpg", "Urlaub_002.jpg",
+                    "OllamaSetup.exe", "Notizen.txt", "Lebenslauf.docx"]
+
+
+def fill_downloads() -> None:
+    DOWNLOADS.mkdir(exist_ok=True)
+    for name in SAMPLE_DOWNLOADS:
+        (DOWNLOADS / name).write_bytes(b"sample " + name.encode() * 20)
+
+
+def check_news(answer: str) -> tuple[bool, str]:
+    # Looked something up (Edge page text or a web tool) and wrote a summary.
+    looked = answer.count("Text lesen") + answer.count("Webseite lesen") + answer.count("Webseite öffnen")
+    points = len(re.findall(r"(?m)^\s*(?:[-•*]|\d+[.)])\s+\S", answer))
+    ok = looked >= 1 and len(answer) > 300
+    return ok, f"lookups={looked} list_points={points} chars={len(answer)} edge={edge_titles()}"
+
+
+def painted_share(hwnd: int) -> float:
+    """Share of non-white pixels in the middle of the Paint window (the canvas)."""
+    import io
+
+    from PIL import Image
+
+    png, _, _ = uia.screenshot(hwnd, 1600)
+    img = Image.open(io.BytesIO(png)).convert("RGB")
+    w, h = img.size
+    canvas = img.crop((int(w * 0.2), int(h * 0.3), int(w * 0.8), int(h * 0.85))).resize((120, 80))
+    pixels = list(canvas.getdata())
+    return sum(1 for r, g, b in pixels if min(r, g, b) < 225) / len(pixels)
+
+
+def check_paint_chip(answer: str) -> tuple[bool, str]:
+    wins = [w for w in uia.list_windows() if (w.process or "").lower() == "mspaint.exe"]
+    share = painted_share(wins[0].handle) if wins else 0.0
+    return share > 0.05, f"paint={[w.title for w in wins]} painted={share:.0%} (picture: screenshot)"
+
+
+def check_downloads(answer: str) -> tuple[bool, str]:
+    left = [n for n in SAMPLE_DOWNLOADS if (DOWNLOADS / n).is_file()]
+    named = [n for n in SAMPLE_DOWNLOADS if n.split(".")[0].lower() in answer.lower()]
+    ok = len(left) == len(SAMPLE_DOWNLOADS) and len(named) >= 3
+    return ok, f"untouched={len(left)}/{len(SAMPLE_DOWNLOADS)} named={named}"
+
+
+def check_letter(answer: str) -> tuple[bool, str]:
+    files = [p for p in new_files(HOME / "Desktop", "") if p.is_file()]
+    keep(files)
+    text = ""
+    for p in files:
+        if p.suffix.lower() in (".txt", ".md", ".html", ".rtf"):
+            text += p.read_text(encoding="utf-8", errors="replace")
+    ok = bool(files) and (not text or bool(re.search(r"Freitag|Frühstück|9[:.]?00|9 Uhr", text)))
+    return ok, f"files={[p.name for p in files]} chars={len(text)}"
+
+
 TASKS = {
+    "sug-news": Task("", check_news, chip="Nachrichten von heute"),
+    "sug-paint": Task("", check_paint_chip, "mspaint.exe", chip="In Paint malen"),
+    "sug-downloads": Task("", check_downloads, "", chip="Download-Ordner ansehen", reset=fill_downloads),
+    "sug-letter": Task("", check_letter, "", chip="Einladung schreiben"),
     "date": Task("Welches Datum haben wir heute? Antworte nur mit dem Datum.", check_date, ""),
     "edge-wiki": Task("Öffne bitte in Edge die Wikipedia-Seite über den Sonnenuntergang und "
                       "sag mir, was im ersten Satz steht.", check_wiki),
@@ -189,7 +255,10 @@ def shot(hwnd: int, name: str) -> None:
 
 def run(hwnd: int, name: str, task: Task) -> dict:
     root = auto.ControlFromHandle(hwnd)
-    subprocess.run(["taskkill", "/F", "/IM", "msedge.exe"], capture_output=True)
+    for proc in {"msedge.exe", task.window} - {""}:
+        subprocess.run(["taskkill", "/F", "/IM", proc], capture_output=True)
+    if task.reset:
+        task.reset()
     time.sleep(2)
     # Fresh conversation for every task.
     if new := button(root, "Neues Gespräch"):
@@ -200,10 +269,18 @@ def run(hwnd: int, name: str, task: Task) -> dict:
         and c.AutomationId == "input")), None), 180, "an enabled chat input")
     before = chat_text(hwnd)
     _started["t"] = time.time()
-    log(f"[{name}] prompt: {task.prompt}")
-    box.GetValuePattern().SetValue(task.prompt)
-    time.sleep(0.3)
-    press(wait_for(lambda: button(root, "Senden"), 10, "the send button"))
+    if task.chip:
+        # Start suggestion: the chip sends its prompt itself.
+        chip = wait_for(lambda: next(iter(find_all(root, lambda c: c.ControlTypeName == "ButtonControl"
+                                                   and (c.Name or "").endswith(task.chip))), None),
+                        30, f"the suggestion '{task.chip}'")
+        log(f"[{name}] suggestion: {chip.Name}")
+        press(chip)
+    else:
+        log(f"[{name}] prompt: {task.prompt}")
+        box.GetValuePattern().SetValue(task.prompt)
+        time.sleep(0.3)
+        press(wait_for(lambda: button(root, "Senden"), 10, "the send button"))
     t0 = time.time()
     wait_for(lambda: button(root, "Abbrechen"), 20, "the turn to start")
 
@@ -229,7 +306,7 @@ def run(hwnd: int, name: str, task: Task) -> dict:
     full = chat_text(hwnd)
     answer = full[len(before):] if full.startswith(before[:200]) else full
     ok, detail = task.check(answer)
-    if name.startswith("report"):
+    if name.startswith("report") or name == "sug-letter":
         ok_card, card = check_file_card(root)
         ok, detail = ok and ok_card, f"{detail} card={card}"
     shot(hwnd, f"widget-{name}.png")
@@ -392,6 +469,10 @@ def main() -> int:
         wait_for(chat_open, 10, "the chat to open")
         log("mascot: Invoke did nothing, a real click opened the chat")
     shot(hwnd, "widget-open.png")
+    rules = Path(os.environ["LOCALAPPDATA"]) / "de.aar.ui" / "rules" / "desktop.md"
+    if rules.is_file():
+        (OUT / "desktop-rules.md").write_bytes(rules.read_bytes())
+    log(f"desktop rules for aar: {rules} exists={rules.is_file()}")
     names = list(TASKS) if SELECTED == "all" else SELECTED.split(",")
     results = []
     for name in names:
@@ -409,6 +490,14 @@ def main() -> int:
         (OUT / "widget.json").write_text(json.dumps(results, ensure_ascii=False, indent=2),
                                          encoding="utf-8")
     app.terminate()
+    log_file = Path(os.environ["LOCALAPPDATA"]) / "de.aar.ui" / "logs" / "aar.log"
+    if log_file.is_file():
+        (OUT / "widget-aar.log").write_bytes(log_file.read_bytes())
+    # Conversations with every tool call and result (why did a step fail?).
+    sessions = HOME / ".agent" / "sessions"
+    for f in sessions.glob("*.jsonl") if sessions.is_dir() else []:
+        (OUT / "sessions").mkdir(exist_ok=True)
+        (OUT / "sessions" / f.name).write_bytes(f.read_bytes())
     if "diag" in names:
         results.append(check_uninstall(Path(EXE).parent))
     log(f"widget: {sum(r['ok'] for r in results)}/{len(results)} passed")

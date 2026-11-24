@@ -67,13 +67,18 @@ try {
 
 # 4. Run -------------------------------------------------------------------------
 $env:PYTHONUTF8 = "1"
+# Ollama options for the model; -Cpu = processor only (num_gpu 0), else Ollama's default (GPU).
+$llmExtra = @{ num_ctx = [int]$params.numCtx }
+if ($params.cpu) { $llmExtra.num_gpu = 0 }
+Log ("LLM options: " + ($llmExtra | ConvertTo-Json -Compress))
 if ($params.mode -eq "tasks") {
+  $env:AAR_TEST_LLM_EXTRA = $llmExtra | ConvertTo-Json -Compress
   & $py "$in\desktop_tasks.py" $out $url $params.model $params.tasks $params.numCtx *> "$out\desktop_tasks.log"
 } elseif ($params.mode -eq "widget") {
   # An aar profile like a user's own ~/.aar/config.json; the widget uses its default.
   New-Item -ItemType Directory -Force "$env:USERPROFILE\.aar" | Out-Null
   # session_dir with "/" like `aar init` writes it (Explorer must still open the folder).
-  @{ provider = "qwen38"; session_dir = ".agent/sessions"; providers = @{ qwen38 = @{ name = "ollama"; model = $params.model; base_url = $url; extra = @{ num_ctx = [int]$params.numCtx } } } } |
+  @{ provider = "qwen38"; session_dir = ".agent/sessions"; providers = @{ qwen38 = @{ name = "ollama"; model = $params.model; base_url = $url; extra = $llmExtra } } } |
     ConvertTo-Json -Depth 5 | Set-Content "$env:USERPROFILE\.aar\config.json" -Encoding ASCII
   & $py "$in\widget_driver.py" $out $exe.FullName $params.tasks *> "$out\widget_driver.log"
 } elseif ($params.mode -eq "edge-probe") {
@@ -81,5 +86,13 @@ if ($params.mode -eq "tasks") {
 } else {
   & $py "$in\paint_probe.py" $params.mode $out *> "$out\paint_probe.log"
 }
-Log "exit=$LASTEXITCODE"
+$exitCode = $LASTEXITCODE
+if ($params.mode -in "tasks", "widget") {
+  try {
+    foreach ($m in (Invoke-RestMethod "$url/api/ps" -TimeoutSec 10).models) {
+      Log ("LLM loaded: {0} size={1:N1} GB on GPU={2:N1} GB" -f $m.name, ($m.size / 1GB), ($m.size_vram / 1GB))
+    }
+  } catch { Log "LLM /api/ps failed: $($_.Exception.Message)" }
+}
+Log "exit=$exitCode"
 "done" | Set-Content "$out\done.txt"
