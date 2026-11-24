@@ -339,6 +339,11 @@ impl AgentProcess {
         if let Some((var, key)) = settings.api_key_env(&profiles) {
             cmd.env(var, key);
         }
+        // Desktop rules (who Aar is for office users, the user's folders) instead of
+        // the CLI's coding-agent rules in ~/.aar/rules.md.
+        for (var, value) in crate::rules::agent_env(app) {
+            cmd.env(var, value);
+        }
 
         if let Some(dir) = crate::addons::ext_dir(app) {
             // Bundled runtime: aar_desktop.boot adds it. Own Python: via PYTHONPATH.

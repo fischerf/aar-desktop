@@ -16,10 +16,12 @@ import {
 import { Mascot, moodLabel, type Mood } from "./mascot";
 import { renderMarkdown } from "./markdown";
 import { describeTool, filePathsIn, forgetDesktop, learnFromTool, prettyJson, toolFileCandidates, toolOutputText } from "./tools";
-import { hasModel, SetupWizard, type OllamaStatus } from "./setup";
+import { fmtBytes, hasModel, SetupWizard, type OllamaStatus } from "./setup";
 import { AddonsView, splitArgs, type AddonSettings } from "./addons";
 import { photoResultCard, PhotosView } from "./photos";
 import { applyStatic, lang, LANG_NAMES, LANGS, locale, onLangChange, resolveLang, setLang, strings } from "./i18n";
+import { Grants, isRisky, permText, renderGrantList, toolLabel } from "./permissions";
+import { HistoryView } from "./history";
 
 interface Settings {
   agentCommand: string;
@@ -43,6 +45,8 @@ interface Settings {
   photoModel?: string;
   /** API keys per cloud provider type (anthropic, openai, gemini, generic). */
   apiKeys?: Record<string, string>;
+  /** Tools allowed permanently (the widget answers aar's permission requests). */
+  allowedTools?: string[];
   anchorRight?: number | null;
   anchorBottom?: number | null;
 }
@@ -178,7 +182,7 @@ const t = strings({
     tipSend: "Senden (Enter) · neue Zeile: Umschalt+Enter",
     send: "Senden",
     working: "Aar arbeitet…",
-    askMe: "Frag mich etwas…",
+    askMe: "Frag mich etwas… (Diktieren: Win+H)",
     notConnected: "Nicht verbunden",
     optModel: "Modell (nur dieses Gespräch)",
     optMode: "Arbeitsweise",
@@ -231,6 +235,26 @@ const t = strings({
     attachUnsupported: "„{name}“ kann ich nicht als Bild öffnen.",
     attachTooMany: "Höchstens {n} Bilder pro Nachricht.",
     removeImage: "Bild entfernen",
+    tipHistory: "Frühere Gespräche",
+    notifyPermTitle: "Aar braucht deine Erlaubnis",
+    notifyDoneTitle: "Aar ist fertig",
+    useInstead: "Stattdessen {model} nehmen",
+    downloadModel: "{model} herunterladen",
+    downloadingModel: "Lade {model} herunter …",
+    modelDownloaded: "{model} ist heruntergeladen – ich bin bereit.",
+    modelDownloadFailed: "Download fehlgeschlagen: {error}",
+    switchedModel: "Ich nutze jetzt {model}.",
+    loadFailed: "Dieses Gespräch konnte ich nicht öffnen.",
+    sugNews: "📰 Nachrichten von heute",
+    sugNewsPrompt: "Such im Internet nach den wichtigsten Nachrichten von heute und fass sie in fünf kurzen Punkten zusammen.",
+    sugPaint: "🎨 In Paint malen",
+    sugPaintPrompt: "Öffne Paint und male einen Sonnenuntergang über dem Meer.",
+    sugDownloads: "📁 Download-Ordner ansehen",
+    sugDownloadsPrompt: "Welche Dateien liegen in meinem Download-Ordner? Mach mir einen Vorschlag, wie ich dort aufräumen kann – noch nichts löschen oder verschieben.",
+    sugLetter: "✉️ Einladung schreiben",
+    sugLetterPrompt: "Schreib eine kurze, freundliche Einladung zum Teamfrühstück am Freitag um 9 Uhr und speichere sie als Datei auf meinem Desktop.",
+    sugPhotos: "🖼️ Fotos suchen",
+    sugPhotosPrompt: "Zeig mir meine Fotos vom Strand.",
   },
   en: {
     bubbleAria: "Chat with Aar",
@@ -360,7 +384,7 @@ const t = strings({
     tipSend: "Send (Enter) · new line: Shift+Enter",
     send: "Send",
     working: "Aar is working…",
-    askMe: "Ask me something…",
+    askMe: "Ask me something… (dictate: Win+H)",
     notConnected: "Not connected",
     optModel: "Model (this conversation only)",
     optMode: "Way of working",
@@ -413,6 +437,26 @@ const t = strings({
     attachUnsupported: "I can't open “{name}” as an image.",
     attachTooMany: "At most {n} images per message.",
     removeImage: "Remove image",
+    tipHistory: "Earlier conversations",
+    notifyPermTitle: "Aar needs your permission",
+    notifyDoneTitle: "Aar is done",
+    useInstead: "Use {model} instead",
+    downloadModel: "Download {model}",
+    downloadingModel: "Downloading {model} …",
+    modelDownloaded: "{model} is downloaded – I'm ready.",
+    modelDownloadFailed: "Download failed: {error}",
+    switchedModel: "I'm using {model} now.",
+    loadFailed: "I could not open this conversation.",
+    sugNews: "📰 Today's news",
+    sugNewsPrompt: "Search the internet for today's most important news and summarise them in five short points.",
+    sugPaint: "🎨 Paint a picture",
+    sugPaintPrompt: "Open Paint and paint a sunset over the sea.",
+    sugDownloads: "📁 Look at my downloads",
+    sugDownloadsPrompt: "Which files are in my Downloads folder? Suggest how I could tidy it up – don't delete or move anything yet.",
+    sugLetter: "✉️ Write an invitation",
+    sugLetterPrompt: "Write a short, friendly invitation to a team breakfast on Friday at 9 am and save it as a file on my desktop.",
+    sugPhotos: "🖼️ Find photos",
+    sugPhotosPrompt: "Show me my photos from the beach.",
   },
   zh: {
     bubbleAria: "与 Aar 聊天",
@@ -542,7 +586,7 @@ const t = strings({
     tipSend: "发送（Enter）· 换行：Shift+Enter",
     send: "发送",
     working: "Aar 正在工作…",
-    askMe: "问我点什么…",
+    askMe: "问我点什么…（语音输入：Win+H）",
     notConnected: "未连接",
     optModel: "模型（仅当前对话）",
     optMode: "工作方式",
@@ -595,6 +639,26 @@ const t = strings({
     attachUnsupported: "无法将“{name}”作为图片打开。",
     attachTooMany: "每条消息最多 {n} 张图片。",
     removeImage: "移除图片",
+    tipHistory: "以前的对话",
+    notifyPermTitle: "Aar 需要你的许可",
+    notifyDoneTitle: "Aar 完成了",
+    useInstead: "改用 {model}",
+    downloadModel: "下载 {model}",
+    downloadingModel: "正在下载 {model} …",
+    modelDownloaded: "{model} 已下载 – 我准备好了。",
+    modelDownloadFailed: "下载失败：{error}",
+    switchedModel: "我现在使用 {model}。",
+    loadFailed: "我无法打开这个对话。",
+    sugNews: "📰 今日新闻",
+    sugNewsPrompt: "在网上搜索今天最重要的新闻，并用五个简短的要点总结。",
+    sugPaint: "🎨 用画图画画",
+    sugPaintPrompt: "打开画图，画一幅海上日落。",
+    sugDownloads: "📁 查看下载文件夹",
+    sugDownloadsPrompt: "我的下载文件夹里有哪些文件？给我一个整理建议 – 先不要删除或移动任何东西。",
+    sugLetter: "✉️ 写一封邀请",
+    sugLetterPrompt: "写一份简短友好的邀请，邀请大家周五上午 9 点参加团队早餐，并保存为桌面上的文件。",
+    sugPhotos: "🖼️ 查找照片",
+    sugPhotosPrompt: "给我看看我在海滩拍的照片。",
   },
 });
 
@@ -643,7 +707,8 @@ let expanded = false;
 let connected = false;
 let connecting = false;
 let busy = false;
-/** Did the current turn produce anything visible (text, thoughts, tools)? */
+/** Did the current turn answer or act (text, tool calls)? Thoughts alone do not
+ * count: small models sometimes stop mid-thought without a word for the user. */
 let turnOutput = false;
 let sessionId: string | null = null;
 let configOptions: ConfigOption[] = [];
@@ -665,6 +730,12 @@ const ctx = { size: 0, used: null as number | null };
 const llm = { check: "", problem: false };
 /** Counts connects, so a preflight of an earlier connection does not touch the status. */
 let connectGen = 0;
+/** Permissions the user granted (this conversation / always). */
+const grants = new Grants();
+/** Tools allowed without asking in the running turn → their note (counts repeats). */
+const autoNotes = new Map<string, { el: HTMLElement; n: number }>();
+/** Saved settings as of the last load (start suggestions depend on them). */
+let uiSettings: Settings | null = null;
 
 const mascot = new Mascot($("mascot"), (m) => refreshStatus(m));
 
@@ -809,7 +880,7 @@ async function preflight(status: (text: string) => void): Promise<boolean> {
     if (!url) return true;
     let r = await invoke<EndpointCheck>("check_endpoint", { url });
     const model = s.model || profile?.model || "";
-    const local = /^(https?:\/\/)?(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/i.test(url);
+    const local = isLocalUrl(url);
     const setupAction: ErrorAction[] = local
       ? [{ label: t("setupNow"), primary: true, run: () => void openSetup() }]
       : [];
@@ -842,7 +913,7 @@ async function preflight(status: (text: string) => void): Promise<boolean> {
       addError(
         t(local ? "modelMissingLocal" : "modelMissing", { model }),
         `${r.message}\n${t("availableModels", { models: r.models.join(", ") })}`,
-        setupAction,
+        modelActions(model, r.models, local && /:11434(\/|$)/.test(url)),
       );
       mascot.set("error", 5000);
       return false;
@@ -851,6 +922,81 @@ async function preflight(status: (text: string) => void): Promise<boolean> {
   } catch (e) {
     console.warn("preflight failed", e);
     return true;
+  }
+}
+
+const isLocalUrl = (url: string) => /^(https?:\/\/)?(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/i.test(url);
+
+/** Server address + model aar talks to (settings, else the profile). */
+async function currentEndpoint(): Promise<{ url: string; model: string }> {
+  const s = await invoke<Settings>("get_settings");
+  const info = await invoke<AarConfigInfo>("aar_config_info", { configPath: null });
+  const profile = s.provider
+    ? info.profiles.find((p) => p.key === s.provider)
+    : (info.profiles.find((p) => p.key === info.defaultProfile) ?? info.defaultInline ?? undefined);
+  return { url: s.baseUrl || profile?.baseUrl || "", model: s.model || profile?.model || "" };
+}
+
+/** Buttons for a model the server does not have: use one that is there
+ * (same family first), or download it (local Ollama). */
+function modelActions(model: string, available: string[], canPull: boolean): ErrorAction[] {
+  const family = (m: string) => m.split(":")[0];
+  const same = (m: string) => Number(family(m) === family(model));
+  const picks = [...available].sort((a, b) => same(b) - same(a)).slice(0, 2);
+  const out: ErrorAction[] = picks.map((m, i) => ({
+    label: t("useInstead", { model: m }),
+    primary: i === 0,
+    run: () => void useModel(m),
+  }));
+  if (canPull) out.push({ label: t("downloadModel", { model }), primary: !out.length, run: (card) => void downloadModel(model, card) });
+  return out;
+}
+
+/** Keep the connection (profile), but with another model. */
+async function useModel(model: string) {
+  const s = await invoke<Settings>("get_settings");
+  const next = { ...s, model };
+  await invoke("save_settings", { settings: next });
+  uiSettings = next;
+  await restartAgent();
+  addSystem(t("switchedModel", { model }));
+}
+
+/** `ollama pull` with progress inside the error card. */
+async function downloadModel(model: string, card: HTMLElement) {
+  const buttons = [...card.querySelectorAll<HTMLButtonElement>(".actions-row button")];
+  for (const b of buttons) b.disabled = true;
+  card.querySelector(".progress-row")?.remove();
+  const row = document.createElement("div");
+  row.className = "progress-row";
+  const text = document.createElement("span");
+  text.textContent = t("downloadingModel", { model });
+  const bar = document.createElement("progress");
+  bar.max = 1;
+  row.append(text, bar);
+  card.appendChild(row);
+  scrollDown();
+  const unlisten = await listen<{ phase: string; done: number; total: number }>("setup://progress", (e) => {
+    const p = e.payload;
+    if (p.phase !== "pull") return;
+    if (p.total > 0) {
+      bar.value = p.done / p.total;
+      text.textContent = `${t("downloadingModel", { model })} ${fmtBytes(p.done)} / ${fmtBytes(p.total)}`;
+    }
+  });
+  try {
+    await invoke("setup_ollama_pull", { model });
+    bar.remove();
+    text.textContent = t("modelDownloaded", { model });
+    llm.problem = false;
+    mascot.set("happy", 2500);
+    refreshStatus(mascot.current);
+  } catch (e) {
+    bar.remove();
+    text.textContent = t("modelDownloadFailed", { error: errText(e) });
+    for (const b of buttons) b.disabled = false;
+  } finally {
+    unlisten();
   }
 }
 
@@ -887,6 +1033,55 @@ async function newChat() {
 
 function greet() {
   addSystem(t("greeting"));
+  showSuggestions();
+}
+
+/** Clickable example tasks in an empty conversation (what can Aar do at all?). */
+function showSuggestions() {
+  removeSuggestions();
+  const s = uiSettings;
+  const list: Array<[string, string]> = [
+    [t("sugNews"), t("sugNewsPrompt")],
+    [t("sugLetter"), t("sugLetterPrompt")],
+    [t("sugDownloads"), t("sugDownloadsPrompt")],
+  ];
+  if (s?.desktopControl !== false) list.splice(1, 0, [t("sugPaint"), t("sugPaintPrompt")]);
+  if (s?.photoFolders?.length) list.push([t("sugPhotos"), t("sugPhotosPrompt")]);
+  const row = document.createElement("div");
+  row.className = "suggestions";
+  row.id = "suggestions";
+  for (const [label, prompt] of list) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = label;
+    b.title = prompt;
+    b.addEventListener("click", () => {
+      if (!connected || busy) return;
+      input.value = prompt;
+      void send();
+    });
+    row.appendChild(b);
+  }
+  messages.appendChild(row);
+}
+
+function removeSuggestions() {
+  document.getElementById("suggestions")?.remove();
+}
+
+/** Turns longer than this get a Windows notification when they end (if the
+ * user is not looking at the widget). */
+const LONG_TURN_MS = 20_000;
+
+function notifyDone(firstOfTurn: number) {
+  const answer = [...messages.children]
+    .slice(firstOfTurn)
+    .filter((el) => el.classList.contains("agent"))
+    .map((el) => (el as HTMLElement).innerText.trim())
+    .filter(Boolean)
+    .pop();
+  const body = (answer ?? "").replace(/\s+/g, " ").slice(0, 140);
+  void invoke("notify_user", { title: t("notifyDoneTitle"), body, show: false }).catch(() => undefined);
 }
 
 // ---------------------------------------------------------------------------
@@ -904,10 +1099,12 @@ async function send() {
   renderAttachments();
   input.value = "";
   autoGrow();
+  removeSuggestions();
   addUser(text, images.map((i) => i.url));
   busy = true;
   turnOutput = false;
   turnTools.clear();
+  autoNotes.clear();
   const turnStart = Date.now();
   const firstOfTurn = messages.childElementCount;
   updateComposer();
@@ -919,8 +1116,8 @@ async function send() {
     switch (reason) {
       case "end_turn":
         if (!turnOutput) {
-          // aar ends the turn normally even when the provider failed; the
-          // actual error only goes to its log (stderr).
+          // aar ends the turn normally even when the provider failed (the
+          // error only goes to its log) or the model stopped mid-thought.
           await reportSilentTurn(stderrBefore);
           break;
         }
@@ -928,6 +1125,7 @@ async function send() {
         mascot.set("happy", 2500);
         if (!expanded) badge.hidden = false;
         void showTurnFiles(turnStart, firstOfTurn);
+        if (Date.now() - turnStart > LONG_TURN_MS) notifyDone(firstOfTurn);
         break;
       case "cancelled":
         addSystem(t("cancelled"));
@@ -967,9 +1165,17 @@ async function reportSilentTurn(stderrBefore: string) {
   const providerDown = /connect|connection|refused|timed? ?out|unreachable/i.test(details);
   // Ollama: HTTP 404 {"error":"model 'gemma4:e4b' not found"}
   const missing = /model ['"]?([^'"\s]+)['"]? not found/i.exec(details)?.[1];
+  let actions: ErrorAction[] = [];
+  if (missing) {
+    // Offer the models the server has (and a download for a local Ollama).
+    const ep = await currentEndpoint().catch(() => ({ url: "", model: "" }));
+    const r = ep.url ? await invoke<EndpointCheck>("check_endpoint", { url: ep.url }).catch(() => null) : null;
+    if (r?.reachable) actions = modelActions(missing, r.models, isLocalUrl(ep.url) && /:11434(\/|$)/.test(ep.url));
+  }
   addError(
     missing ? t("modelMissing", { model: missing }) : providerDown ? t("noAnswerProvider") : t("noAnswer"),
     details,
+    actions,
   );
   llm.problem = true;
   mascot.set("error", 5000);
@@ -988,7 +1194,7 @@ function stop() {
 // ---------------------------------------------------------------------------
 
 function handleUpdate(u: SessionUpdate) {
-  if (["agent_message_chunk", "agent_thought_chunk", "tool_call"].includes(u.sessionUpdate)) turnOutput = true;
+  if (["agent_message_chunk", "tool_call"].includes(u.sessionUpdate)) turnOutput = true;
   switch (u.sessionUpdate) {
     case "agent_message_chunk": {
       const c = (u as { content: { type: string; text?: string } }).content;
@@ -1168,9 +1374,16 @@ const optionLabel = (kind: string): string | undefined =>
   ];
 
 function askPermission(req: PermissionRequest): Promise<string | null> {
+  const tc = req.toolCall;
+  const tool = (tc.title ?? "").trim();
+  // allow_once also for granted tools: aar forgets its own "always" after the answer.
+  const allowOpt = req.options.find((o) => o.kind === "allow_once") ?? req.options.find((o) => o.kind === "allow_always");
+  if (allowOpt && grants.allowed(req.sessionId, tool)) {
+    noteAutoAllowed(req.sessionId, tc);
+    return Promise.resolve(allowOpt.optionId);
+  }
   return new Promise((resolve) => {
     finishStreaming();
-    const tc = req.toolCall;
     const { verb, detail, icon } = describeTool(tc);
 
     const card = document.createElement("div");
@@ -1191,10 +1404,13 @@ function askPermission(req: PermissionRequest): Promise<string | null> {
     card.querySelector("pre")!.textContent = `${tc.title ?? ""}\n${prettyJson(tc.rawInput)}`;
 
     const actions = card.querySelector(".actions")!;
-    const order = ["allow_once", "reject_once", "allow_always"];
+    // aar's own "allow always" only lasts until the end of the answer; the
+    // widget offers its own scopes instead (see permissions.ts).
+    const order = ["allow_once", "reject_once"];
     const opts: PermissionOption[] = [...req.options]
-      .filter((o) => o.kind !== "reject_always")
+      .filter((o) => order.includes(o.kind))
       .sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind));
+    const risky = isRisky(tool, tc.kind);
 
     const finish = (optionId: string | null, label: string) => {
       if (!pendingPermissions.has(done)) return;
@@ -1218,13 +1434,78 @@ function askPermission(req: PermissionRequest): Promise<string | null> {
       );
       actions.appendChild(b);
     }
+    if (allowOpt && tool) {
+      const scopes: Array<["conversation" | "always", string, string]> = [
+        ["conversation", permText("allowConversation"), permText("allowedConversation")],
+      ];
+      if (!risky) scopes.push(["always", permText("allowAlways"), permText("allowedAlways")]);
+      for (const [scope, label, result] of scopes) {
+        const b = document.createElement("button");
+        b.className = "secondary";
+        b.dataset.scope = scope;
+        b.textContent = label;
+        b.addEventListener("click", () => {
+          void grants.grant(req.sessionId, tool, scope, tc.kind).catch((e) => addError(errText(e)));
+          finish(allowOpt.optionId, result);
+        });
+        actions.appendChild(b);
+      }
+      if (risky) {
+        const note = document.createElement("p");
+        note.className = "note";
+        note.textContent = permText("riskyNote");
+        actions.after(note);
+      }
+    }
 
     messages.appendChild(card);
     mascot.set("asking");
     setExpanded(true);
     scrollDown();
     (actions.querySelector("button.primary") as HTMLButtonElement | null)?.focus();
+    // Windows notification when the user is somewhere else (shows a hidden widget).
+    void invoke("notify_user", { title: t("notifyPermTitle"), body: detail ? `${verb}: ${detail}` : verb, show: true }).catch(
+      () => undefined,
+    );
   });
+}
+
+/** A granted tool was allowed without asking: a small note with "Zurücknehmen";
+ * repeats within the turn only count up. */
+function noteAutoAllowed(sid: string, tc: ToolCallInfo) {
+  const tool = (tc.title ?? "").trim();
+  const what = toolLabel(tool, tc.kind);
+  const known = autoNotes.get(tool);
+  if (known) {
+    known.n += 1;
+    known.el.querySelector(".text")!.textContent = permText("autoAllowedN", { what, n: known.n });
+    return;
+  }
+  const el = document.createElement("div");
+  el.className = "auto-allowed";
+  const text = document.createElement("span");
+  text.className = "text";
+  text.textContent = permText("autoAllowed", { what });
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "link";
+  b.textContent = permText("revoke");
+  b.addEventListener("click", () => {
+    void grants.revoke(sid, tool).then(
+      () => {
+        text.textContent = permText("revoked");
+        b.remove();
+        autoNotes.delete(tool);
+      },
+      (e) => addError(errText(e)),
+    );
+  });
+  el.append(text, b);
+  const chip = tc.toolCallId ? tools.get(tc.toolCallId)?.el : undefined;
+  if (chip) chip.after(el);
+  else messages.appendChild(el);
+  autoNotes.set(tool, { el, n: 1 });
+  scrollDown();
 }
 
 function resolveAllPermissions(optionId: string | null) {
@@ -1333,7 +1614,8 @@ function addSystem(text: string) {
 interface ErrorAction {
   label: string;
   primary?: boolean;
-  run: () => void;
+  /** `card` = the error card (e.g. to show progress in it). */
+  run: (card: HTMLElement) => void;
 }
 
 function addError(text: string, details = "", actions: ErrorAction[] | boolean = false) {
@@ -1358,7 +1640,7 @@ function addError(text: string, details = "", actions: ErrorAction[] | boolean =
       const b = document.createElement("button");
       b.className = a.primary ? "primary" : "secondary";
       b.textContent = a.label;
-      b.addEventListener("click", a.run);
+      b.addEventListener("click", () => a.run(el));
       row.appendChild(b);
     }
     el.appendChild(row);
@@ -1730,8 +2012,11 @@ const field = (id: string) => $<HTMLInputElement>(id);
 const providerSelect = $<HTMLSelectElement>("set-provider");
 
 async function openSettings() {
+  historyView.close();
   await setExpanded(true);
   loadedSettings = await invoke<Settings>("get_settings");
+  uiSettings = loadedSettings;
+  renderGrantList($("grant-list"), grants, sessionId, (msg) => ($("settings-error").textContent = msg));
   field("set-command").value = loadedSettings.agentCommand;
   field("set-args").value = loadedSettings.agentArgs.join(" ");
   field("set-cwd").value = loadedSettings.workingDir;
@@ -2014,8 +2299,59 @@ const wizard = new SetupWizard({
 });
 
 async function openSetup() {
+  historyView.close();
   await setExpanded(true);
   await wizard.open();
+}
+
+// ---------------------------------------------------------------------------
+// Conversation list (🕘)
+// ---------------------------------------------------------------------------
+
+const historyView = new HistoryView({
+  show(on) {
+    if (on) closeSettings();
+    $("history").hidden = !on;
+    app.classList.toggle("history-open", on);
+  },
+  load: (id) => loadConversation(id),
+  current: () => sessionId,
+  deletedCurrent: () => localStorage.removeItem(LAST_SESSION_KEY),
+});
+
+/** Continue a saved conversation: aar replays it via session/update. */
+async function loadConversation(id: string) {
+  if (id === sessionId) return;
+  if (!client.running || !connected) {
+    localStorage.setItem(LAST_SESSION_KEY, id);
+    return connect(true);
+  }
+  if (busy && sessionId) client.cancel(sessionId);
+  resolveAllPermissions(null);
+  busy = false;
+  clearMessages();
+  ctx.used = null;
+  renderContext();
+  sessionId = null;
+  early = [];
+  try {
+    const cwd = await invoke<string>("agent_working_dir");
+    const info = await client.loadSession(id, cwd, await mcpServers());
+    if (!info) throw new Error(`unknown session ${id}`);
+    sessionId = info.sessionId;
+    configOptions = info.configOptions;
+    flushEarly();
+    finishStreaming();
+    localStorage.setItem(LAST_SESSION_KEY, sessionId);
+    mascot.set("idle");
+    scrollDown(true);
+  } catch (e) {
+    early = null;
+    finishStreaming();
+    await newChat();
+    addError(t("loadFailed"), errText(e));
+  }
+  updateComposer();
 }
 
 function renderSessionOptions() {
@@ -2091,6 +2427,7 @@ async function saveSettings() {
     $("settings-error").textContent = errText(e);
     return;
   }
+  uiSettings = next;
   const keys: (keyof Settings)[] = ["agentCommand", "workingDir", "provider", "model", "baseUrl", "configPath", "desktopControl"];
   const restart =
     keys.some((k) => next[k] !== loadedSettings![k]) ||
@@ -2120,7 +2457,10 @@ onLangChange(() => {
   translateStatic();
   updateComposer();
   renderContext();
+  historyView.rerender();
+  if (document.getElementById("suggestions")) showSuggestions();
   if (!settingsView.hidden) {
+    renderGrantList($("grant-list"), grants, sessionId, (msg) => ($("settings-error").textContent = msg));
     renderSessionOptions();
     void showVersion();
     void showDiagnosticPaths();
@@ -2152,7 +2492,11 @@ input.addEventListener("input", () => {
 });
 input.addEventListener("blur", () => mascot.current === "listening" && mascot.set("idle"));
 
-$("btn-new").addEventListener("click", () => void newChat());
+$("btn-new").addEventListener("click", () => {
+  historyView.close();
+  void newChat();
+});
+$("btn-history").addEventListener("click", () => void historyView.toggle());
 $("btn-settings").addEventListener("click", () => (settingsView.hidden ? openSettings() : closeSettings()));
 $("btn-close").addEventListener("click", () => void setExpanded(false));
 $("btn-settings-cancel").addEventListener("click", closeSettings);
@@ -2184,7 +2528,8 @@ field("set-config").addEventListener("change", () => void loadAarConfig(provider
 
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
-    if (!setupView.hidden) wizard.close();
+    if (historyView.isOpen) historyView.close();
+    else if (!setupView.hidden) wizard.close();
     else if (!settingsView.hidden) closeSettings();
     else void setExpanded(false);
   }
@@ -2211,6 +2556,12 @@ autoGrow();
 // The saved language may differ from the cached one (first start, other PC):
 // settle it before the first texts (greeting, errors) are written.
 void invoke<Settings>("get_settings")
-  .then((s) => applyLanguage(s.language ?? ""))
+  .then(async (s) => {
+    uiSettings = s;
+    grants.load(s.allowedTools);
+    applyLanguage(s.language ?? "");
+    // aar's rules name the UI language: Rust must know it before aar starts.
+    await invoke("set_ui_language", { lang: lang() });
+  })
   .catch(() => undefined)
   .finally(() => void connect());

@@ -33,6 +33,9 @@ async function run(colorScheme) {
   await page.mouse.up();
   await page.waitForSelector("#app:not(.collapsed)");
   check(await page.locator(".msg.system").first().innerText().then((t) => t.includes("Hallo")), "greeting shown");
+  const sugs = await page.locator("#suggestions button").allInnerTexts();
+  check(sugs.length === 4 && sugs.some((s) => s.includes("Paint")), `start suggestions shown: ${sugs.join(" | ")}`);
+  check((await page.getAttribute("#input", "placeholder")).includes("Win+H"), "placeholder mentions dictation");
   const calls = await page.evaluate(() => window.__shim.calls.map((c) => c[0]));
   check(calls.includes("set_expanded"), "set_expanded invoked");
   // Context size of the default profile next to "New conversation" (before any prompt).
@@ -97,6 +100,14 @@ async function run(colorScheme) {
   check(await page.locator("#mascot.mood-error").count() === 1, "mascot shows error");
   await page.waitForFunction(() => !document.querySelector("#btn-send.stop"));
 
+  // Stopped mid-thought (no answer, no tool): explained, not a silent "done".
+  const errorsBefore = await page.locator(".msg.error").count();
+  await page.fill("#input", "bitte nur denken");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction((n) => document.querySelectorAll(".msg.error").length > n, errorsBefore);
+  check((await page.locator(".msg.error").last().innerText()).includes("keine Antwort"), "thought-only turn explained");
+  await page.waitForFunction(() => !document.querySelector("#btn-send.stop"));
+
   // Windows desktop control: MCP server passed with the session, plain-language card.
   const newSess = await page.evaluate(() => window.__shim.sent.find((m) => m.method === "session/new"));
   check(newSess?.params?.mcpServers?.[0]?.name === "windows", "windows MCP server passed in session/new");
@@ -134,7 +145,11 @@ async function run(colorScheme) {
   await page.waitForSelector(".permission:not(.resolved)");
   check(await page.locator("#mascot.mood-asking").count() === 1, "mascot asks for permission");
   const labels = await page.locator(".permission:not(.resolved) .actions button").allInnerTexts();
-  check(JSON.stringify(labels) === JSON.stringify(["Erlauben", "Ablehnen", "Immer erlauben"]), `permission buttons ${labels}`);
+  check(JSON.stringify(labels) === JSON.stringify(["Erlauben", "Ablehnen", "Für dieses Gespräch erlauben", "Immer erlauben"]),
+    `permission buttons ${labels}`);
+  check(await page.locator("#suggestions").count() === 0, "suggestions gone after the first message");
+  const note = await page.evaluate(() => window.__shim.notifications.at(-1));
+  check(note?.title === "Aar braucht deine Erlaubnis" && note.body.includes("Datei schreiben") && note.show, `notification for permission ${JSON.stringify(note)}`);
   await page.screenshot({ path: `${OUT}/permission-${colorScheme}.png` });
   await page.click(".permission:not(.resolved) button.primary");
   await page.waitForSelector(".tool.completed");
@@ -172,6 +187,87 @@ async function run(colorScheme) {
   await page.waitForFunction(() => !document.querySelector("#btn-send.stop"));
   check((await page.evaluate(() => window.__shim.permissionOutcome))?.outcome === "cancelled", "stop cancels pending permission");
   check(await page.locator(".msg.system", { hasText: "Abgebrochen" }).count() >= 1, "cancel message shown");
+
+  // Risky tools (commands) can only be allowed for the conversation.
+  await page.fill("#input", "fehler provozieren datei");
+  await page.keyboard.press("Enter");
+  await page.waitForSelector(".permission:not(.resolved)");
+  const riskyLabels = await page.locator(".permission:not(.resolved) .actions button").allInnerTexts();
+  check(!riskyLabels.includes("Immer erlauben") && riskyLabels.includes("Für dieses Gespräch erlauben") &&
+    await page.locator(".permission:not(.resolved) .note").count() === 1, `command: no "always" ${riskyLabels}`);
+  await page.click(".permission:not(.resolved) button.danger");
+  await page.waitForFunction(() => !document.querySelector("#btn-send.stop"));
+
+  // "Immer erlauben": saved, the next request is answered without a card.
+  const clickTurn = async (text) => {
+    await page.fill("#input", text);
+    await page.keyboard.press("Enter");
+  };
+  await clickTurn("klick auf den Bleistift");
+  await page.waitForSelector(".permission:not(.resolved)");
+  await page.click(".permission:not(.resolved) button[data-scope=always]");
+  await page.waitForFunction(() => !document.querySelector("#btn-send.stop"));
+  check(JSON.stringify(await page.evaluate(() => window.__shim.settings.allowedTools)) === '["windows__click_element"]',
+    "always-grant saved in the settings");
+  check((await page.evaluate(() => window.__shim.permissionOutcome))?.optionId === "allow_once", "granted: allow_once sent");
+  const cardsBefore = await page.locator(".permission").count();
+  await clickTurn("klick nochmal");
+  await page.waitForSelector(".auto-allowed");
+  await page.waitForFunction(() => !document.querySelector("#btn-send.stop"));
+  check(await page.locator(".permission").count() === cardsBefore, "granted tool: no permission card");
+  check((await page.locator(".auto-allowed").last().innerText()).includes("Ohne Nachfrage erlaubt: 🖱️ Klicken"),
+    `auto-allowed note: ${await page.locator(".auto-allowed").last().innerText()}`);
+  await page.screenshot({ path: `${OUT}/auto-allowed-${colorScheme}.png` });
+
+  // Settings list: revoke -> asks again.
+  await page.click("#btn-settings");
+  await page.waitForSelector("#settings:not([hidden]) .grant");
+  const grantRow = await page.locator("#grant-list .grant").first().innerText();
+  check(grantRow.includes("Klicken") && grantRow.includes("immer"), `grant listed: ${grantRow.replace(/\s+/g, " ")}`);
+  await page.screenshot({ path: `${OUT}/grants-${colorScheme}.png` });
+  await page.click("#grant-list .grant button");
+  await page.waitForFunction(() => window.__shim.settings.allowedTools.length === 0);
+  check((await page.innerText("#grant-list")).includes("Aar fragt vor jeder Änderung"), "revoked: list empty");
+  await page.click("#btn-settings-cancel");
+  await clickTurn("klick drei");
+  await page.waitForSelector(".permission:not(.resolved)");
+  check(true, "revoked tool asks again");
+  // "Für dieses Gespräch": no card in this conversation, but in a new one.
+  await page.click(".permission:not(.resolved) button[data-scope=conversation]");
+  await page.waitForFunction(() => !document.querySelector("#btn-send.stop"));
+  check((await page.evaluate(() => window.__shim.settings.allowedTools)).length === 0, "conversation grant not saved");
+  const cards2 = await page.locator(".permission").count();
+  await clickTurn("klick vier");
+  await page.waitForFunction(() => !document.querySelector("#btn-send.stop") && document.querySelectorAll(".msg.agent").length > 0);
+  await page.waitForTimeout(100);
+  check(await page.locator(".permission").count() === cards2, "conversation grant answers in the same conversation");
+
+  // Conversation list: open, continue an old one, delete one.
+  await page.click("#btn-history");
+  await page.waitForSelector("#history:not([hidden]) .history-item");
+  const items = await page.locator("#history-list .history-title").allInnerTexts();
+  check(JSON.stringify(items) === JSON.stringify(["Wie steht die NVIDIA-Aktie?", "Schreib ein Gedicht"]), `history list ${items}`);
+  check(await page.isHidden("#composer"), "history replaces the chat");
+  await page.screenshot({ path: `${OUT}/history-${colorScheme}.png` });
+  await page.click("#history-list .history-item:nth-child(2) .history-delete");
+  check((await page.locator("#history-list .history-item:nth-child(2) .history-delete").innerText()) === "Wirklich löschen?", "delete asks first");
+  await page.click("#history-list .history-item:nth-child(2) .history-delete");
+  await page.waitForFunction(() => document.querySelectorAll("#history-list .history-item").length === 1);
+  check((await page.evaluate(() => window.__shim.deletedSession)) === "old-2", "conversation deleted");
+  await page.click("#history-list .history-entry");
+  await page.waitForSelector("#history", { state: "hidden" });
+  await page.waitForSelector(".msg.agent >> text=180 Dollar");
+  check((await page.locator(".msg.user").allInnerTexts()).join("|") === "Wie steht die NVIDIA-Aktie?", "old conversation replayed");
+  check((await page.evaluate(() => localStorage.getItem("aar-ui:last-session"))) === "old-1", "continued conversation remembered");
+  // Conversation grants belong to their conversation.
+  await clickTurn("klick fünf");
+  await page.waitForSelector(".permission:not(.resolved)");
+  await page.click(".permission:not(.resolved) button.primary");
+  await page.waitForFunction(() => !document.querySelector("#btn-send.stop"));
+  check(true, "other conversation asks again");
+  // Back to a fresh conversation for the rest of the test.
+  await page.click("#btn-new");
+  await page.waitForFunction(() => localStorage.getItem("aar-ui:last-session")?.startsWith("s-"));
 
   // Settings: mode select with friendly names, change is sent.
   await page.click("#btn-settings");
@@ -276,6 +372,19 @@ async function run(colorScheme) {
   check(true, "preflight warns about missing model");
   await page.waitForFunction(() => document.getElementById("status-text").textContent === "nicht bereit");
   check(true, "missing model -> not ready");
+  const modelCard = page.locator(".msg.error", { hasText: "gibt es auf dem Server nicht" }).last();
+  const modelButtons = await modelCard.locator(".actions-row button").allInnerTexts();
+  check(modelButtons.includes("Stattdessen qwen3.8:latest nehmen") && modelButtons.includes("gemma4:e4b herunterladen"),
+    `missing model offers alternatives + download: ${modelButtons}`);
+  await page.evaluate(() => { window.__shim.slow = 150; });
+  await modelCard.locator("button", { hasText: "herunterladen" }).click();
+  await modelCard.locator("progress").waitFor();
+  check(true, "download progress inside the card");
+  await modelCard.locator(".progress-row", { hasText: "ist heruntergeladen" }).waitFor();
+  check((await page.evaluate(() => window.__shim.pulled)) === "gemma4:e4b", "missing model downloaded from the card");
+  await page.waitForFunction(() => document.getElementById("status-text").textContent !== "nicht bereit");
+  check(true, "ready after the download");
+  await page.evaluate(() => { delete window.__shim.slow; });
 
   // Ollama installed but stopped -> started automatically, then ready.
   await page.evaluate(() => { window.__shim.ollamaStopped = true; window.__shim.slow = 300; });

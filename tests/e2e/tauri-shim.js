@@ -67,6 +67,11 @@
       return agentSay({ jsonrpc: "2.0", id, result: { stopReason: "end_turn" } });
     }
     await stream(sid, "agent_thought_chunk", "Ich überlege, wie ich helfen kann.");
+    if (low.includes("nur denken")) {
+      // Small local model: stops mid-thought, no answer, no tool call.
+      await stream(sid, "agent_thought_chunk", "Ich werde die Datei erst");
+      return agentSay({ jsonrpc: "2.0", id, result: { stopReason: "end_turn" } });
+    }
     let answer;
     if (low.includes("tischen")) {
       // Photo search (bundled photos MCP server): thumbnails card.
@@ -111,6 +116,24 @@
       update(sid, { sessionUpdate: "tool_call", toolCallId: "p3", title: "windows__drag", kind: "execute",
         status: "completed", rawInput: { window: "262714", element: "e150", points: [[0, 0.5], [1, 0.5]] } });
       answer = "Gemalt.";
+    } else if (low.includes("klick")) {
+      // Desktop click that needs permission (granted tools are answered by the widget).
+      const n = (window.__shim.clicks = (window.__shim.clicks ?? 0) + 1);
+      const tc = { toolCallId: `call_click_${n}`, title: "windows__click_element", kind: "execute", status: "pending",
+        rawInput: { window: "262714", element: "e22" } };
+      update(sid, { sessionUpdate: "tool_call", ...tc });
+      const resp = await askClient("session/request_permission", {
+        sessionId: sid, toolCall: tc,
+        options: [
+          { optionId: "allow_once", kind: "allow_once", name: "Allow once" },
+          { optionId: "allow_always", kind: "allow_always", name: "Allow always" },
+          { optionId: "reject_once", kind: "reject_once", name: "Deny" },
+        ],
+      });
+      window.__shim.permissionOutcome = resp.result?.outcome;
+      update(sid, { sessionUpdate: "tool_call_update", toolCallId: tc.toolCallId, status: "completed",
+        content: [{ type: "content", content: { type: "text", text: "clicked" } }] });
+      answer = "Geklickt.";
     } else if (low.includes("programm")) {
       const tc = { toolCallId: "call_app", title: "launch_app", kind: "execute", status: "pending", rawInput: { name_or_path: "excel" } };
       update(sid, { sessionUpdate: "tool_call", ...tc });
@@ -184,10 +207,19 @@
         }
         return setTimeout(() => agentSay({ jsonrpc: "2.0", id, result: { sessionId: sid, configOptions } }), 5);
       }
-      case "session/load":
-        // Like aar for unknown sessions: `{}` instead of null.
+      case "session/load": {
         window.__shim.loads = (window.__shim.loads ?? 0) + 1;
+        // Saved conversation: replay it like aar, then answer with its options.
+        const saved = savedSessions[params.sessionId];
+        if (saved) {
+          for (const [kind, text] of saved) {
+            update(params.sessionId, { sessionUpdate: kind, content: { type: "text", text } });
+          }
+          return setTimeout(() => agentSay({ jsonrpc: "2.0", id, result: { configOptions } }), 5);
+        }
+        // Like aar for unknown sessions: `{}` instead of null.
         return agentSay({ jsonrpc: "2.0", id, result: {} });
+      }
       case "session/prompt":
         window.__shim.lastPromptImages = params.prompt.filter((b) => b.type === "image");
         return void runPrompt(id, params.sessionId, params.prompt.map((b) => b.text).join(" "));
@@ -201,6 +233,17 @@
         return agentSay({ jsonrpc: "2.0", id, error: { code: -32601, message: "nope" } });
     }
   }
+
+  // Saved conversations (history list + session/load replay).
+  const savedSessions = {
+    "old-1": [["user_message_chunk", "Wie steht die NVIDIA-Aktie?"], ["agent_message_chunk", "Die Aktie steht bei 180 Dollar."]],
+    "old-2": [["user_message_chunk", "Schreib ein Gedicht"], ["agent_message_chunk", "Rosen sind rot."]],
+  };
+  const sessionList = [
+    { id: "old-1", title: "Wie steht die NVIDIA-Aktie?", modifiedMs: Date.now() - 3600_000 },
+    { id: "old-2", title: "Schreib ein Gedicht", modifiedMs: Date.now() - 3 * 86400_000 },
+  ];
+  window.__shim.notifications = [];
 
   // ---- Tauri internals ------------------------------------------------------
   const settings = {
@@ -429,11 +472,25 @@
         case "get_settings":
           return { ...settings };
         case "save_settings": {
-          // Like Rust: add-on lists are owned by their own commands.
-          const { disabledExtensions, mcpServers, photoFolders, photoModel } = settings;
-          Object.assign(settings, args.settings, { disabledExtensions, mcpServers, photoFolders, photoModel });
+          // Like Rust: add-on lists and grants are owned by their own commands.
+          const { disabledExtensions, mcpServers, photoFolders, photoModel, allowedTools } = settings;
+          Object.assign(settings, args.settings, { disabledExtensions, mcpServers, photoFolders, photoModel, allowedTools });
           return null;
         }
+        case "set_allowed_tools":
+          settings.allowedTools = [...args.tools];
+          return null;
+        case "list_sessions":
+          return sessionList.map((s) => ({ ...s }));
+        case "delete_session": {
+          const i = sessionList.findIndex((s) => s.id === args.id);
+          if (i >= 0) sessionList.splice(i, 1);
+          window.__shim.deletedSession = args.id;
+          return null;
+        }
+        case "notify_user":
+          window.__shim.notifications.push({ title: args.title, body: args.body, show: args.show });
+          return true;
         default:
           return null; // set_expanded, start_dragging, …
       }

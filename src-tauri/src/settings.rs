@@ -48,6 +48,10 @@ pub struct Settings {
     /// when `provider` is that type; aar gets it as the provider's environment
     /// variable (never on the command line or in the log).
     pub api_keys: std::collections::BTreeMap<String, String>,
+    /// Tools the user allowed permanently ("Immer erlauben"): the widget
+    /// answers aar's permission requests for them itself (raw tool names,
+    /// e.g. `windows__click_element`).
+    pub allowed_tools: Vec<String>,
     /// Bottom-right corner of the window (physical pixels), restored on start.
     /// The mascot sits in that corner, so the bubble grows up/left from it.
     pub anchor_right: Option<i32>,
@@ -78,6 +82,7 @@ impl Default for Settings {
             photo_folders: vec![],
             photo_model: String::new(),
             api_keys: Default::default(),
+            allowed_tools: vec![],
             anchor_right: None,
             anchor_bottom: None,
             expanded_width: None,

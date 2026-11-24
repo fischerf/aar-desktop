@@ -8,6 +8,8 @@ mod helpers;
 mod files;
 mod llm_config;
 mod photos;
+mod rules;
+mod sessions;
 mod settings;
 mod setup;
 
@@ -217,10 +219,12 @@ fn save_settings(app: AppHandle, state: State<AppState>, settings: Settings) -> 
         // opened earlier must not bring back an old list.
         let addons = (std::mem::take(&mut s.disabled_extensions), std::mem::take(&mut s.mcp_servers));
         let photos = (std::mem::take(&mut s.photo_folders), std::mem::take(&mut s.photo_model));
+        let allowed = std::mem::take(&mut s.allowed_tools);
         *s = settings;
         (s.anchor_right, s.anchor_bottom, s.expanded_width, s.expanded_height) = keep;
         (s.disabled_extensions, s.mcp_servers) = addons;
         (s.photo_folders, s.photo_model) = photos;
+        s.allowed_tools = allowed;
         s.save(&app)?;
     }
     if hotkey_changed {
@@ -418,6 +422,44 @@ fn set_disabled_extensions(app: AppHandle, state: State<AppState>, names: Vec<St
     let mut s = state.settings.lock().unwrap();
     s.disabled_extensions = names;
     s.save(&app)
+}
+
+/// Tools allowed permanently ("Immer erlauben"); changed from the permission
+/// cards and the settings list right away.
+#[tauri::command]
+fn set_allowed_tools(app: AppHandle, state: State<AppState>, tools: Vec<String>) -> Result<(), String> {
+    let mut s = state.settings.lock().unwrap();
+    s.allowed_tools = tools;
+    s.save(&app)
+}
+
+/// Saved conversations for the history list, newest first.
+#[tauri::command]
+async fn list_sessions(app: AppHandle, state: State<'_, AppState>) -> Result<Vec<sessions::SessionEntry>, String> {
+    let dir = state.settings.lock().unwrap().sessions_dir(&app);
+    blocking(move || sessions::list(&dir, 200)).await
+}
+
+#[tauri::command]
+fn delete_session(app: AppHandle, state: State<AppState>, id: String) -> Result<(), String> {
+    let dir = state.settings.lock().unwrap().sessions_dir(&app);
+    sessions::delete(&dir, &id)
+}
+
+/// Windows notification, unless the user is looking at the widget anyway.
+/// `show` brings a hidden widget back (e.g. Aar waits for a permission).
+/// Returns whether a notification was sent.
+#[tauri::command]
+fn notify_user(app: AppHandle, window: WebviewWindow, title: String, body: String, show: bool) -> bool {
+    use tauri_plugin_notification::NotificationExt;
+    let visible = window.is_visible().unwrap_or(false);
+    if visible && window.is_focused().unwrap_or(false) {
+        return false;
+    }
+    if show && !visible {
+        let _ = window.show();
+    }
+    app.notification().builder().title(title).body(body).show().is_ok()
 }
 
 /// MCP servers from Settings → Tools (used from the next session on).
@@ -848,6 +890,7 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(AgentProcess::default())
         .setup(|app| {
             let handle = app.handle().clone();
@@ -1004,6 +1047,10 @@ pub fn run() {
             addons_cancel,
             set_disabled_extensions,
             set_mcp_servers,
+            set_allowed_tools,
+            list_sessions,
+            delete_session,
+            notify_user,
             set_ui_language,
             set_expanded,
             hide_window,

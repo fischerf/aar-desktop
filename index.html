@@ -22,6 +22,7 @@
           <span class="spacer" data-tauri-drag-region></span>
           <span class="ctx" id="ctx-meter" role="meter" aria-valuemin="0" hidden><span class="ctx-bar"><span id="ctx-fill"></span></span><span id="ctx-text"></span></span>
           <button class="icon-btn" id="btn-new" data-i18n-tip="newChat" data-i18n-aria="newChat">＋</button>
+          <button class="icon-btn" id="btn-history" data-i18n-tip="tipHistory" data-i18n-aria="tipHistory">☰</button>
           <button class="icon-btn" id="btn-settings" data-i18n-tip="settings" data-i18n-aria="settings">⚙</button>
           <button class="icon-btn" id="btn-close" data-i18n-tip="tipCollapse" data-i18n-aria="collapse">✕</button>
         </header>
@@ -52,6 +53,7 @@
               <span data-i18n="autostart"></span>
             </label>
             <p class="hint bad" id="autostart-problem"></p>
+            <div id="grant-list"></div>
 
             <h3 data-i18n="languageHead"></h3>
             <label><span data-i18n="languageLabel"></span>
@@ -195,6 +197,15 @@
           <div class="settings-actions">
             <button id="btn-setup-cancel" class="secondary" data-i18n="later"></button>
             <button id="btn-setup-start" class="primary" data-i18n="setUp"></button>
+          </div>
+        </section>
+
+        <section id="history" hidden>
+          <h2 id="history-title"></h2>
+          <p class="hint" id="history-intro"></p>
+          <div id="history-list"></div>
+          <div class="settings-actions">
+            <button id="btn-history-back" class="secondary" data-i18n="back"></button>
           </div>
         </section>
 
