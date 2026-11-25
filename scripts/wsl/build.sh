@@ -60,6 +60,9 @@ OUT="src-tauri/target/$TARGET/$PROFILE"
 mkdir -p "$SRC/dist"
 rm -f "$SRC/dist/Aar.exe"   # old name, shadowed `aar` on PATH lookups
 cp "$OUT/aar-desktop.exe" "$SRC/dist/aar-desktop.exe"
-cp "$OUT"/bundle/nsis/*.exe "$SRC/dist/"
+# Only this version's installer: older ones in the bundle folder must not overwrite
+# released installers in dist (same file name, different content).
+VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+cp "$OUT/bundle/nsis/Aar_${VERSION}_x64-setup.exe" "$SRC/dist/"
 echo "==> done:"
 ls -la "$SRC/dist"
