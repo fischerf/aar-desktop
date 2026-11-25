@@ -286,21 +286,22 @@ The setup assistant recommends one of these models:
 | **Qwen 3.8 (27B)** | about 18 GB | Best quality. Needs a graphics card with at least 20 GB of video memory. |
 | **Gemma 4 (E4B)** | about 7 GB | Balanced. Runs on a graphics card with 8 GB or without one on a PC with 12 GB of RAM or more. |
 | **Qwen 3.5 (4B)** | about 3 GB | Small and fast, for less powerful computers. |
+| :eu: **Ministral 3 (14B)** | about 9 GB | European model by Mistral AI (France). Needs a graphics card with at least 12 GB of video memory. Offered in the list, not suggested automatically. |
 
 Larger models handle complex desktop tasks much more reliably. How fast a model answers depends strongly on
 your hardware; the figures above are guidelines, not guarantees.
 
 We tested the four start suggestions of the empty chat with each model:
 
-| Suggestion | Gemma 4 (E4B) | Qwen 3.5 (4B) | Qwen 3.8 (27B) |
-|---|---|---|---|
-| 📰 Today's news | ✅ | ✅ | ✅ |
-| 🎨 Paint a picture | sometimes | sometimes | ✅ |
-| 📁 Look at my downloads | ✅ | ✅ | ✅ |
-| ✉️ Write an invitation | ✅ | ✅ | ✅ |
+| Suggestion | Gemma 4 (E4B) | Qwen 3.5 (4B) | Qwen 3.8 (27B) | :eu: Ministral 3 (14B) |
+|---|---|---|---|---|
+| 📰 Today's news | ✅ | ✅ | ✅ | ✅ |
+| 🎨 Paint a picture | sometimes | sometimes | ✅ | ❌ |
+| 📁 Look at my downloads | ✅ | ✅ | ✅ | ✅ |
+| ✉️ Write an invitation | ✅ | ✅ | ✅ | mostly |
 
-The small models are fine for looking things up, listing files and writing texts. For operating programs such as
-Paint, use Qwen 3.8. With a graphics card, a request takes from a few seconds to a few minutes. Without one, the small
+The small models and Ministral 3 are fine for looking things up, listing files and writing texts. For operating
+programs such as Paint, use Qwen 3.8. Ministral 3 needs a graphics card; on the processor alone it is far too slow. With a graphics card, a request takes from a few seconds to a few minutes. Without one, the small
 models take about 4 to 30 times longer.
 
 ### Using a cloud provider

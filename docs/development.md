@@ -191,6 +191,22 @@ outcome is checked on the machine:
   - The desktop rules ask for full paths: the phrase "my desktop" in an earlier version was used literally as a
     folder name.
 
+**EU model Ministral 3 (14B)** (`ministral-3:14b`, 2026-11-25, Aar 0.1.3, 10.4 GB on the GPU):
+
+| Suggestion | GPU run 1 | GPU run 2 | CPU |
+|---|---|---|---|
+| 📰 Today's news | ✅ 70 s | ✅ 69 s | ✅ 26 min |
+| 🎨 Paint a picture | ❌ 0 % | ❌ 0 % | ❌ 0 % |
+| 📁 Look at my downloads | ✅ 12 s | ✅ 11 s | ❌ tool call as text |
+| ✉️ Write an invitation | ✅ 4 s | ❌ claimed a file, no tool call | ✅ 70 s |
+
+- **Result:** a little below Gemma 4 and far too slow on the processor. The wizard therefore offers it with the EU
+  flag but never suggests it automatically (`optional` in `MODEL_CATALOG`).
+- **Fix found by this run:** Mistral models sometimes write a tool call as text, `list_directory[ARGS]{…}`, without the
+  `[TOOL_CALLS]` token that Ollama parses. aar (`develop` d56604f, `agent/providers/_text_tool_calls.py`) now turns an
+  answer that consists only of such calls to offered tools into real tool calls. While streaming, it holds the start
+  of an answer back only as long as it could still become such a call.
+
 Results, screenshots and session files are under `E:\Windows_Sandbox\desktop\results\<model>-gpu|cpu`.
 
 Only one Windows Sandbox can run at a time; the scripts share a mutex. Starting a Sandbox also interrupts running
