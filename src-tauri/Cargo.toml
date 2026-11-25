@@ -1,6 +1,6 @@
 [package]
 name = "aar-desktop"
-version = "0.1.2"
+version = "0.1.3"
 description = "Aar desktop mascot for Windows 11"
 edition = "2021"
 license = "Apache-2.0"
