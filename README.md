@@ -12,6 +12,12 @@
 **A friendly desktop assistant for Windows 11 – powered by the aar agent**
 
 [![Website](https://img.shields.io/badge/website-fischerf.github.io%2Faar--desktop-blue?style=flat-square)](https://fischerf.github.io/aar-desktop/)
+[![Made in the EU](https://img.shields.io/badge/made%20in%20the-EU-003399?style=flat-square)](#privacy-by-design)
+[![Local-first](https://img.shields.io/badge/local--first-Ollama-2ea44f?style=flat-square)](#privacy-by-design)
+[![No telemetry](https://img.shields.io/badge/telemetry-none-2ea44f?style=flat-square)](#privacy-by-design)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)](LICENSE)
+
+🇪🇺 Made in the EU · local-first · no cloud, no account, no telemetry
 
 <img src="docs/img/aar-desktop.gif" alt="Aar opens Paint and paints a sunset over the sea" width="800" />
 
@@ -39,6 +45,18 @@ Aar Desktop is made for people who never open a terminal: office workers, famili
 ask than search through menus. By default the language model runs **locally on your own computer**
 (via [Ollama](https://ollama.com/)), so your files and photos stay on your PC. If you prefer, you can connect
 a cloud provider such as Anthropic, OpenAI or Google Gemini instead.
+
+### Privacy by design
+
+- **Local-first:** with a local model (the default), your messages, files and photos never leave your PC.
+  This makes GDPR-compliant use easy.
+- **No cloud, no account, no telemetry:** Aar Desktop collects no usage data and does not check for updates. It
+  only goes online by itself to download Ollama and the language model during setup, and to load the extension
+  list when you open *Extensions*.
+- **You stay in control:** cloud providers, web pages and tool servers are only used when you set them up or ask
+  for them. With a cloud provider, your messages and the content Aar reads for a task are sent to that provider.
+- **Made in the EU** and open source under the Apache License 2.0: you can read every line of what runs on
+  your PC.
 
 ## Screenshots
 
