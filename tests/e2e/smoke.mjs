@@ -425,7 +425,26 @@ async function run(colorScheme) {
   check((await page.innerText("#step-hw .d")).includes("7900 XTX (24 GB)"), "wizard shows GPU with real VRAM");
   check((await page.innerText("#btn-setup-start")) === "Übernehmen", "present model -> no download needed");
   await page.screenshot({ path: `${OUT}/setup-gpu-${colorScheme}.png` });
+  check(!(await page.$("#step-model-note .eu-flag")), "no EU flag for a non-EU model");
+  await page.selectOption("#setup-model", "ministral-3:14b");
+  check((await page.innerText("#setup-model option[value='ministral-3:14b']")).includes("EU-Modell"), "EU model tagged in the list");
+  check(!!(await page.$("#step-model-note svg.eu-flag")), "EU model shows the EU flag");
+  check((await page.innerText("#step-model-note")).includes("Mistral AI"), "EU model note names Mistral AI");
+  await page.screenshot({ path: `${OUT}/setup-eu-${colorScheme}.png` });
   await page.click("#btn-setup-cancel");
+
+  // 16 GB GPU: the EU model fits but is only offered, Gemma 4 stays the suggestion.
+  const sysBefore = await page.evaluate(() => window.__shim.sys);
+  await page.evaluate(() => {
+    window.__shim.sys = { ramMb: 32768, cpuThreads: 12, gpus: [{ name: "Radeon RX 7800 XT", vendor: "amd", vramMb: 16384 }] };
+  });
+  await page.click("#btn-settings");
+  await page.click("#btn-open-setup");
+  await page.waitForSelector("#setup:not([hidden]) #step-hw[data-state=done]");
+  check((await page.inputValue("#setup-model")) === "gemma4:e4b", "16 GB GPU -> gemma4 suggested, EU model only offered");
+  check(!(await page.innerText("#setup-model option[value='ministral-3:14b']")).includes("empfohlen"), "EU model not marked recommended");
+  await page.click("#btn-setup-cancel");
+  await page.evaluate((s) => { window.__shim.sys = s; }, sysBefore);
 
   // CPU-only office PC, Ollama missing -> gemma4:e4b, install + download.
   await page.evaluate(() => {

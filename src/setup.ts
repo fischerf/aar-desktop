@@ -10,6 +10,8 @@ const t = strings({
     noteBest: "Beste Qualität – braucht eine Grafikkarte mit mind. 20 GB Speicher",
     noteBalanced: "Ausgewogen – läuft auch ohne starke Grafikkarte",
     noteSmall: "Klein und schnell – für schwächere Rechner",
+    noteEu: "Europäisches Modell von Mistral AI (Frankreich) – braucht eine Grafikkarte mit mind. 12 GB Speicher",
+    tagEu: "EU-Modell",
     onGpu: "läuft auf der Grafikkarte {gpu}",
     onCpu: "läuft auf dem Prozessor ({ram} Arbeitsspeicher)",
     checking: "Prüfe …",
@@ -42,6 +44,8 @@ const t = strings({
     noteBest: "Best quality – needs a graphics card with at least 20 GB of memory",
     noteBalanced: "Balanced – also runs without a powerful graphics card",
     noteSmall: "Small and fast – for less powerful computers",
+    noteEu: "European model by Mistral AI (France) – needs a graphics card with at least 12 GB of memory",
+    tagEu: "EU model",
     onGpu: "runs on the graphics card {gpu}",
     onCpu: "runs on the processor ({ram} of memory)",
     checking: "Checking …",
@@ -74,6 +78,8 @@ const t = strings({
     noteBest: "质量最佳 – 需要至少 20 GB 显存的显卡",
     noteBalanced: "均衡 – 没有高性能显卡也能运行",
     noteSmall: "小巧快速 – 适合配置较低的电脑",
+    noteEu: "来自 Mistral AI（法国）的欧洲模型 – 需要至少 12 GB 显存的显卡",
+    tagEu: "欧盟模型",
     onGpu: "在显卡 {gpu} 上运行",
     onCpu: "在处理器上运行（{ram} 内存）",
     checking: "正在检查 …",
@@ -104,7 +110,7 @@ const t = strings({
   },
 });
 
-type NoteKey = "noteBest" | "noteBalanced" | "noteSmall";
+type NoteKey = "noteBest" | "noteBalanced" | "noteSmall" | "noteEu";
 
 /** Rust reports a cancelled setup with this text (in any UI language). */
 const CANCELLED = ["Abgebrochen", "Cancelled", "已取消"];
@@ -144,6 +150,10 @@ export interface ModelChoice {
   minRamGb: number;
   /** Short description (translated at display time). */
   note: NoteKey;
+  /** Made in the EU - the wizard shows the EU flag so EU users can pick it. */
+  eu?: boolean;
+  /** Offered in the list, but never suggested automatically. */
+  optional?: boolean;
 }
 
 /** Ordered best → smallest. Sizes from the Ollama registry (download size). */
@@ -156,6 +166,18 @@ export const MODEL_CATALOG: ModelChoice[] = [
     cpuOk: false,
     minRamGb: 32,
     note: "noteBest",
+  },
+  {
+    id: "ministral-3:14b",
+    title: "Ministral 3 (14B)",
+    sizeGb: 9.1,
+    minVramGb: 12,
+    cpuOk: false,
+    minRamGb: 24,
+    note: "noteEu",
+    eu: true,
+    // Sandbox tests: a bit below Gemma 4 on desktop tasks, too slow on the processor.
+    optional: true,
   },
   {
     id: "gemma4:e4b",
@@ -177,6 +199,38 @@ export const MODEL_CATALOG: ModelChoice[] = [
   },
 ];
 
+/** Small EU flag as SVG - Windows shows the 🇪🇺 emoji only as the letters "EU". */
+export function euFlag(): SVGSVGElement {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 30 20");
+  svg.setAttribute("class", "eu-flag");
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", "EU");
+  const bg = document.createElementNS(ns, "rect");
+  bg.setAttribute("width", "30");
+  bg.setAttribute("height", "20");
+  bg.setAttribute("fill", "#003399");
+  svg.appendChild(bg);
+  // Twelve five-pointed stars on a circle (radius 6 around the centre).
+  for (let i = 0; i < 12; i++) {
+    const a = (i * Math.PI) / 6;
+    const cx = 15 + 6 * Math.sin(a);
+    const cy = 10 - 6 * Math.cos(a);
+    const pts: string[] = [];
+    for (let k = 0; k < 10; k++) {
+      const r = k % 2 === 0 ? 1.1 : 0.45;
+      const b = (k * Math.PI) / 5;
+      pts.push(`${(cx + r * Math.sin(b)).toFixed(2)},${(cy - r * Math.cos(b)).toFixed(2)}`);
+    }
+    const star = document.createElementNS(ns, "polygon");
+    star.setAttribute("points", pts.join(" "));
+    star.setAttribute("fill", "#FFCC00");
+    svg.appendChild(star);
+  }
+  return svg;
+}
+
 /** Dedicated GPUs Ollama can use (NVIDIA/AMD); integrated graphics are ignored. */
 export function bestGpu(info: SystemInfo): Gpu | undefined {
   return info.gpus
@@ -191,7 +245,7 @@ export function fits(m: ModelChoice, info: SystemInfo): boolean {
 }
 
 export function recommend(info: SystemInfo): { model: ModelChoice; reason: string } {
-  const model = MODEL_CATALOG.find((m) => fits(m, info)) ?? MODEL_CATALOG[MODEL_CATALOG.length - 1];
+  const model = MODEL_CATALOG.find((m) => !m.optional && fits(m, info)) ?? MODEL_CATALOG[MODEL_CATALOG.length - 1];
   const gpu = bestGpu(info);
   const vram = (gpu?.vramMb ?? 0) / 1024;
   const reason =
@@ -292,7 +346,12 @@ export class SetupWizard {
       const o = document.createElement("option");
       o.value = m.id;
       const present = hasModel(ollama.models, m.id);
-      const tags = [m.id === rec.model.id ? t("recommended") : "", present ? t("present") : fmtGb(m.sizeGb), fits(m, info) ? "" : t("tooBig")]
+      const tags = [
+        m.eu ? t("tagEu") : "",
+        m.id === rec.model.id ? t("recommended") : "",
+        present ? t("present") : fmtGb(m.sizeGb),
+        fits(m, info) ? "" : t("tooBig"),
+      ]
         .filter(Boolean)
         .join(", ");
       o.textContent = `${m.title} – ${tags}`;
@@ -321,7 +380,9 @@ export class SetupWizard {
     const present = hasModel(this.ollama.models, id);
     const rec = recommend(this.info);
     const why = m.id === rec.model.id ? t("why", { reason: rec.reason }) : fits(m, this.info) ? "" : t("tooBigWarn");
-    $("step-model-note").textContent = `${t(m.note)}.${why}`;
+    const note = $("step-model-note");
+    note.textContent = `${t(m.note)}.${why}`;
+    if (m.eu) note.prepend(euFlag());
     this.setStep("step-pull", present ? "skip" : "pending", present ? t("alreadyPresent") : t("willDownload", { size: fmtGb(m.sizeGb) }));
     $("btn-setup-start").textContent = present && this.ollama.running ? t("apply") : t("setUp");
   }
