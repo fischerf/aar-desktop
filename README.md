@@ -17,7 +17,7 @@
 [![No telemetry](https://img.shields.io/badge/telemetry-none-2ea44f?style=flat-square)](#privacy-by-design)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)](LICENSE)
 
-🇪🇺 Made in the EU · local-first · no cloud, no account, no telemetry
+Made in the EU · local-first · no cloud, no account, no telemetry
 
 <img src="docs/img/aar-desktop.gif" alt="Aar opens Paint and paints a sunset over the sea" width="800" />
 
