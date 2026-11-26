@@ -207,23 +207,50 @@ pub fn api_key_env(kind: &str) -> Option<&'static str> {
     }
 }
 
+/// Build the `:generateContent` URL for a custom Gemini HTTP gateway,
+/// matching `aar/agent/providers/gemini.py`.
+fn gemini_generate_url(base_url: &str) -> String {
+    let mut base = base_url.trim().trim_end_matches('/');
+    for suffix in [":generateContent", ":streamGenerateContent", ":streamGenerateContentSse"] {
+        if let Some(stripped) = base.strip_suffix(suffix) {
+            base = stripped;
+            break;
+        }
+    }
+    format!("{base}:generateContent")
+}
+
 /// Request that lists the models of a cloud provider (checks the key as well).
 fn models_request(kind: &str, base_url: &str, key: &str) -> Result<(String, Vec<(&'static str, String)>), String> {
     let base = base_url.trim().trim_end_matches('/');
     Ok(match kind {
-        "anthropic" => (
-            format!("{}/v1/models?limit=100", if base.is_empty() { "https://api.anthropic.com" } else { base }),
-            vec![("x-api-key", key.to_string()), ("anthropic-version", "2023-06-01".into())],
-        ),
-        "openai" | "generic" => {
-            if kind == "generic" && base.is_empty() {
-                return Err(tr("Bitte die Server-Adresse eintragen.", "Please enter the server address.", "请填写服务器地址。").into());
-            }
-            // aar's generic provider takes the full chat endpoint; the model list sits next to it.
+        "anthropic" => {
+            let root = if base.is_empty() {
+                "https://api.anthropic.com"
+            } else {
+                base.strip_suffix("/v1").unwrap_or(base)
+            };
+            (
+                format!("{root}/v1/models?limit=100"),
+                vec![("x-api-key", key.to_string()), ("anthropic-version", "2023-06-01".into())],
+            )
+        }
+        "openai" => {
             let root = base.strip_suffix("/chat/completions").unwrap_or(base);
             (
                 format!("{}/models", if root.is_empty() { "https://api.openai.com/v1" } else { root }),
                 vec![("authorization", format!("Bearer {key}"))],
+            )
+        }
+        "generic" => {
+            if base.is_empty() {
+                return Err(tr("Bitte die Server-Adresse eintragen.", "Please enter the server address.", "请填写服务器地址。").into());
+            }
+            // aar's generic provider takes the full chat endpoint; some servers expose /models next to it.
+            let root = base.strip_suffix("/chat/completions").unwrap_or(base);
+            (
+                format!("{root}/models"),
+                vec![("authorization", format!("Bearer {key}")), ("api-key", key.to_string())],
             )
         }
         "gemini" => (
@@ -232,6 +259,90 @@ fn models_request(kind: &str, base_url: &str, key: &str) -> Result<(String, Vec<
         ),
         _ => return Err(trf!("Unbekannter Anbieter {kind}", "Unknown provider {kind}", "未知的提供方 {kind}")),
     })
+}
+
+fn connected_ok(models: Vec<String>) -> EndpointCheck {
+    let message = if models.is_empty() {
+        tr(
+            "Verbunden – der Schlüssel funktioniert.",
+            "Connected – the key works.",
+            "已连接 – 密钥有效。",
+        )
+        .into()
+    } else {
+        trf!(
+            "Verbunden – der Schlüssel funktioniert ({} Modelle).",
+            "Connected – the key works ({} models).",
+            "已连接 – 密钥有效（{} 个模型）。",
+            models.len()
+        )
+    };
+    EndpointCheck { reachable: true, message, models }
+}
+
+fn map_provider_error(kind: &str, url: &str, err: ureq::Error) -> EndpointCheck {
+    let fail = |m: String| EndpointCheck { reachable: false, message: m, models: vec![] };
+    match err {
+        ureq::Error::Status(401 | 403, _) => fail(
+            tr(
+                "Der API-Schlüssel wurde abgelehnt. Bitte prüfe ihn.",
+                "The API key was rejected. Please check it.",
+                "API 密钥被拒绝，请检查。",
+            )
+            .into(),
+        ),
+        ureq::Error::Status(400, r) if kind == "gemini" => {
+            // Gemini answers an invalid key with 400 API_KEY_INVALID.
+            let body = r.into_string().unwrap_or_default();
+            fail(if body.contains("API_KEY_INVALID") {
+                tr("Der API-Schlüssel wurde abgelehnt. Bitte prüfe ihn.", "The API key was rejected. Please check it.", "API 密钥被拒绝，请检查。").into()
+            } else {
+                format!("HTTP 400: {}", body.chars().take(200).collect::<String>())
+            })
+        }
+        ureq::Error::Status(code, _) => fail(trf!(
+            "Der Server antwortet mit Fehler {code} ({url}).",
+            "The server answered with error {code} ({url}).",
+            "服务器返回错误 {code}（{url}）。"
+        )),
+        e => fail(trf!("Keine Verbindung: {e}", "No connection: {e}", "无法连接：{e}")),
+    }
+}
+
+/// Probe a single-model custom Gemini HTTP gateway via `:generateContent`
+/// (aar uses `api-key` header in HTTP mode and these gateways have no `/models`).
+fn check_custom_gemini(agent: &ureq::Agent, base_url: &str, key: &str) -> EndpointCheck {
+    let url = gemini_generate_url(base_url);
+    let body = serde_json::json!({
+        "contents": [{ "role": "user", "parts": [{ "text": "ping" }] }],
+        "generationConfig": { "maxOutputTokens": 1 }
+    });
+    match agent.post(&url).set("api-key", key).send_json(body) {
+        Ok(_) => connected_ok(vec![]),
+        Err(e) => map_provider_error("gemini", &url, e),
+    }
+}
+
+/// Fallback probe for single-model OpenAI-compatible (`generic`) gateways that
+/// do not expose a `/models` route (e.g. company API gateways).
+fn check_generic_post(agent: &ureq::Agent, base_url: &str, key: &str, model: &str) -> EndpointCheck {
+    let url = base_url.trim().trim_end_matches('/');
+    let mut body = serde_json::json!({
+        "messages": [{ "role": "user", "content": "ping" }],
+        "max_completion_tokens": 1
+    });
+    if !model.trim().is_empty() {
+        body["model"] = Value::String(model.trim().to_string());
+    }
+    match agent
+        .post(url)
+        .set("api-key", key)
+        .set("authorization", &format!("Bearer {key}"))
+        .send_json(body)
+    {
+        Ok(_) => connected_ok(vec![]),
+        Err(e) => map_provider_error("generic", url, e),
+    }
 }
 
 /// Model ids from a provider's model list (OpenAI/Anthropic `data[].id`,
@@ -257,16 +368,21 @@ fn model_ids(json: &Value) -> Vec<String> {
     ids
 }
 
-pub fn check_provider(kind: &str, base_url: &str, key: &str) -> EndpointCheck {
+pub fn check_provider(kind: &str, base_url: &str, key: &str, model: &str) -> EndpointCheck {
     let fail = |m: String| EndpointCheck { reachable: false, message: m, models: vec![] };
-    if key.trim().is_empty() {
+    let key = key.trim();
+    if key.is_empty() {
         return fail(tr("Bitte den API-Schlüssel eintragen.", "Please enter the API key.", "请填写 API 密钥。").into());
     }
-    let (url, headers) = match models_request(kind, base_url, key.trim()) {
+    let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(15)).build();
+    // Custom Gemini HTTP gateway (base_url set): aar uses HTTP mode with :generateContent.
+    if kind == "gemini" && !base_url.trim().is_empty() {
+        return check_custom_gemini(&agent, base_url, key);
+    }
+    let (url, headers) = match models_request(kind, base_url, key) {
         Ok(r) => r,
         Err(e) => return fail(e),
     };
-    let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(15)).build();
     let mut req = agent.get(&url);
     for (name, value) in &headers {
         req = req.set(name, value);
@@ -274,45 +390,12 @@ pub fn check_provider(kind: &str, base_url: &str, key: &str) -> EndpointCheck {
     match req.call() {
         Ok(resp) => {
             let json: Value = resp.into_json().unwrap_or(Value::Null);
-            let models = model_ids(&json);
-            EndpointCheck {
-                reachable: true,
-                message: trf!(
-                    "Verbunden – der Schlüssel funktioniert ({} Modelle).",
-                    "Connected – the key works ({} models).",
-                    "已连接 – 密钥有效（{} 个模型）。",
-                    models.len()
-                ),
-                models,
-            }
+            connected_ok(model_ids(&json))
         }
-        Err(ureq::Error::Status(401 | 403, _)) => fail(
-            tr(
-                "Der API-Schlüssel wurde abgelehnt. Bitte prüfe ihn.",
-                "The API key was rejected. Please check it.",
-                "API 密钥被拒绝，请检查。",
-            )
-            .into(),
-        ),
-        Err(ureq::Error::Status(400, r)) if kind == "gemini" => {
-            // Gemini answers an invalid key with 400 API_KEY_INVALID.
-            let body = r.into_string().unwrap_or_default();
-            fail(if body.contains("API_KEY_INVALID") {
-                tr("Der API-Schlüssel wurde abgelehnt. Bitte prüfe ihn.", "The API key was rejected. Please check it.", "API 密钥被拒绝，请检查。").into()
-            } else {
-                format!("HTTP 400: {}", body.chars().take(200).collect::<String>())
-            })
+        Err(ureq::Error::Status(404 | 405, _)) if kind == "generic" => {
+            check_generic_post(&agent, base_url, key, model)
         }
-        Err(ureq::Error::Status(code, _)) => fail(trf!(
-            "Der Server antwortet mit Fehler {code} ({url}).",
-            "The server answered with error {code} ({url}).",
-            "服务器返回错误 {code}（{url}）。"
-        )),
-        Err(e) => fail(trf!(
-            "Keine Verbindung: {e}",
-            "No connection: {e}",
-            "无法连接：{e}"
-        )),
+        Err(e) => map_provider_error(kind, &url, e),
     }
 }
 
@@ -374,7 +457,19 @@ mod tests {
         )
         .unwrap();
         assert_eq!(model_ids(&gemini), ["g1"]);
-        assert!(!check_provider("anthropic", "", " ").reachable);
+        assert_eq!(
+            models_request("anthropic", "https://proxy.example/v1", "k").unwrap().0,
+            "https://proxy.example/v1/models?limit=100"
+        );
+        assert_eq!(
+            gemini_generate_url("https://api.example/gemini/flash/"),
+            "https://api.example/gemini/flash:generateContent"
+        );
+        assert_eq!(
+            gemini_generate_url("https://api.example/gemini/flash:streamGenerateContentSse"),
+            "https://api.example/gemini/flash:generateContent"
+        );
+        assert!(!check_provider("anthropic", "", " ", "").reachable);
         assert_eq!(api_key_env("gemini"), Some("GEMINI_API_KEY"));
         assert_eq!(api_key_env("ollama"), None);
     }

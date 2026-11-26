@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Aar
+Comment=Your desktop assistant
+Comment[de]=Dein Desktop-Assistent
+Comment[zh_CN]=你的桌面助手
+Exec=aar-desktop
+Icon=aar-desktop
+Categories=Office;Utility;
+Terminal=false
+StartupNotify=false

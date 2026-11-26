@@ -249,7 +249,7 @@
   const settings = {
     agentCommand: "aar", agentArgs: ["acp"], workingDir: "", hotkey: "Ctrl+Alt+A",
     provider: "", model: "", baseUrl: "", configPath: "", desktopControl: true, autostart: true,
-    language: window.__shimLang ?? "de", disabledExtensions: [], mcpServers: [],
+    language: window.__shimLang ?? "de", disabledExtensions: [], mcpServers: [], customProviders: [],
     ...(window.__shimSettings ?? {}),
   };
   window.__shim.settings = settings;
@@ -355,9 +355,11 @@
             : { reachable: true, message: "Ollama auf localhost:11434 erreichbar", models: ["qwen3.8:latest", "qwen3.5:4b"] };
         case "check_provider":
           window.__shim.providerChecks = [...(window.__shim.providerChecks ?? []), args];
-          return args.apiKey === "sk-bad"
-            ? { reachable: false, message: "Der API-Schlüssel wurde abgelehnt. Bitte prüfe ihn.", models: [] }
-            : { reachable: true, message: "Verbunden – der Schlüssel funktioniert (2 Modelle).", models: ["claude-sonnet-4-6", "claude-haiku-4-5"] };
+          if (args.apiKey === "sk-bad")
+            return { reachable: false, message: "Der API-Schlüssel wurde abgelehnt. Bitte prüfe ihn.", models: [] };
+          if (args.kind === "gemini" && args.baseUrl)
+            return { reachable: true, message: "Verbunden – der Schlüssel funktioniert.", models: [] };
+          return { reachable: true, message: "Verbunden – der Schlüssel funktioniert (2 Modelle).", models: ["claude-sonnet-4-6", "claude-haiku-4-5"] };
         case "agent_send":
           agentReceive(args.line);
           return null;
@@ -452,6 +454,8 @@
           return "C:\\Users\\Demo";
         case "app_version":
           return "0.1.0";
+        case "app_platform":
+          return window.__shimPlatform ?? "windows";
         case "turn_files": {
           if (window.__shimTurnFiles) return window.__shimTurnFiles;
           // Like Rust: only files that exist and changed during the turn.

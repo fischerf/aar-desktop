@@ -39,6 +39,24 @@ const t = strings({
     retry: "Erneut versuchen",
     later: "Später",
     of: "{done} von {total}",
+    optional: "(optional)",
+    kindGemini: "Google Gemini (Cloud / Custom)",
+    kindAnthropic: "Anthropic Claude – Cloud",
+    kindOpenai: "OpenAI (Cloud / Custom)",
+    kindGeneric: "Anderer Dienst (OpenAI-kompatibel)",
+    geminiUrl: "leer = Google Gemini, oder eigene Gateway-URL",
+    genericUrl: "z. B. https://example.com/v1/chat/completions",
+    providerDefaultUrl: "leer = Standardadresse des Anbieters",
+    modelPlaceholderGemini: "z. B. gemini-3.1-flash-lite",
+    modelPlaceholderDefault: "nach „Testen“ aus der Liste wählen",
+    cloudNote: "☁ Mit {name} gehen deine Nachrichten und alles, was Aar liest (Fenster, Dateien, Webseiten), an diesen Dienst.",
+    checkingProvider: "Prüfe {name} …",
+    apiKeyRequired: "Bitte den API-Schlüssel für {name} eintragen.",
+    baseUrlRequired: "Bitte die Server-Adresse eintragen.",
+    modelRequired: "Bitte ein Modell eintragen.",
+    modelNotOnServer: "⚠ „{model}“ ist auf diesem Server nicht vorhanden.",
+    introLocal: "Aar nutzt ein Sprachmodell, das direkt auf diesem Computer läuft – deine Daten bleiben hier. Ich richte alles automatisch ein.",
+    introCloud: "Verbinde Aar mit einem Cloud-Anbieter (z. B. Google Gemini, OpenAI, Anthropic) oder einem eigenen API-Gateway.",
   },
   en: {
     noteBest: "Best quality – needs a graphics card with at least 20 GB of memory",
@@ -73,6 +91,24 @@ const t = strings({
     retry: "Try again",
     later: "Later",
     of: "{done} of {total}",
+    optional: "(optional)",
+    kindGemini: "Google Gemini (Cloud / Custom)",
+    kindAnthropic: "Anthropic Claude – cloud",
+    kindOpenai: "OpenAI (Cloud / Custom)",
+    kindGeneric: "Other service (OpenAI-compatible)",
+    geminiUrl: "empty = Google Gemini, or custom gateway URL",
+    genericUrl: "e.g. https://example.com/v1/chat/completions",
+    providerDefaultUrl: "empty = the provider's default address",
+    modelPlaceholderGemini: "e.g. gemini-3.1-flash-lite",
+    modelPlaceholderDefault: "pick one from the list after “Test”",
+    cloudNote: "☁ With {name}, your messages and everything Aar reads (windows, files, web pages) go to that service.",
+    checkingProvider: "Checking {name} …",
+    apiKeyRequired: "Please enter the API key for {name}.",
+    baseUrlRequired: "Please enter the server address.",
+    modelRequired: "Please enter a model.",
+    modelNotOnServer: "⚠ “{model}” is not available on this server.",
+    introLocal: "Aar uses a language model that runs right on this computer – your data stays here. I'll set everything up automatically.",
+    introCloud: "Connect Aar to a cloud provider (e.g. Google Gemini, OpenAI, Anthropic) or your own API gateway.",
   },
   zh: {
     noteBest: "质量最佳 – 需要至少 20 GB 显存的显卡",
@@ -107,6 +143,24 @@ const t = strings({
     retry: "重试",
     later: "稍后",
     of: "{done} / {total}",
+    optional: "（可选）",
+    kindGemini: "Google Gemini（云端 / 自定义）",
+    kindAnthropic: "Anthropic Claude – 云端",
+    kindOpenai: "OpenAI（云端 / 自定义）",
+    kindGeneric: "其他服务（兼容 OpenAI）",
+    geminiUrl: "留空 = Google Gemini，或自定义网关地址",
+    genericUrl: "例如 https://example.com/v1/chat/completions",
+    providerDefaultUrl: "留空 = 提供方的默认地址",
+    modelPlaceholderGemini: "例如 gemini-3.1-flash-lite",
+    modelPlaceholderDefault: "点击“测试”后从列表中选择",
+    cloudNote: "☁ 使用 {name} 时，你的消息以及 Aar 读取的所有内容（窗口、文件、网页）都会发送到该服务。",
+    checkingProvider: "正在检查 {name} …",
+    apiKeyRequired: "请填写 {name} 的 API 密钥。",
+    baseUrlRequired: "请填写服务器地址。",
+    modelRequired: "请填写模型。",
+    modelNotOnServer: "⚠ 此服务器上没有“{model}”。",
+    introLocal: "Aar 使用直接运行在这台电脑上的语言模型 – 你的数据不会离开这里。我会自动完成所有设置。",
+    introCloud: "将 Aar 连接到云端提供方（如 Google Gemini、OpenAI、Anthropic）或自定义 API 网关。",
   },
 });
 
@@ -287,14 +341,40 @@ export function fmtBytes(n: number): string {
 // Wizard
 // ---------------------------------------------------------------------------
 
+export interface CloudSetupResult {
+  name: string;
+  kind: string;
+  model: string;
+  baseUrl: string;
+  apiKey: string;
+}
+
 export interface SetupHost {
   /** Show/hide the setup view inside the bubble. */
   show(on: boolean): void;
   /** Called after success with the chosen Ollama model and a context size for it. */
   done(model: string, contextWindow: number): Promise<void>;
+  /** Called after configuring a cloud or custom provider in the wizard. */
+  doneCloud(config: CloudSetupResult): Promise<void>;
 }
 
+type SetupMode = "local" | "cloud";
 type StepState = "pending" | "current" | "active" | "done" | "error" | "skip";
+
+const CLOUD_SETUP_KINDS = ["gemini", "anthropic", "openai", "generic"] as const;
+type CloudKindKey = "kindGemini" | "kindAnthropic" | "kindOpenai" | "kindGeneric";
+const CLOUD_KIND_TEXT: Record<string, CloudKindKey> = {
+  gemini: "kindGemini",
+  anthropic: "kindAnthropic",
+  openai: "kindOpenai",
+  generic: "kindGeneric",
+};
+
+interface EndpointCheck {
+  reachable: boolean;
+  message: string;
+  models: string[];
+}
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -303,21 +383,124 @@ export class SetupWizard {
   private ollama: OllamaStatus | null = null;
   private running = false;
   private activeStep = "";
+  private mode: SetupMode = "local";
 
   constructor(private host: SetupHost) {
     void listen<Progress>("setup://progress", (e) => this.onProgress(e.payload));
     $("btn-setup-start").addEventListener("click", () => void this.run());
     $("btn-setup-cancel").addEventListener("click", () => this.close());
     $("setup-model").addEventListener("change", () => this.describeChoice());
+    for (const btn of document.querySelectorAll<HTMLElement>("#setup [data-setup-mode]")) {
+      btn.addEventListener("click", () => {
+        if (!this.running) this.setMode(btn.dataset.setupMode as SetupMode);
+      });
+    }
+    $("setup-cloud-kind").addEventListener("change", () => this.updateCloudFields());
+    $("btn-setup-cloud-test").addEventListener("click", () => void this.testCloud());
   }
 
   get busy() {
     return this.running;
   }
 
+  private fillCloudKinds(selected = "gemini") {
+    const sel = $<HTMLSelectElement>("setup-cloud-kind");
+    sel.innerHTML = "";
+    for (const k of CLOUD_SETUP_KINDS) {
+      const o = document.createElement("option");
+      o.value = k;
+      o.textContent = t(CLOUD_KIND_TEXT[k]);
+      sel.appendChild(o);
+    }
+    sel.value = CLOUD_SETUP_KINDS.includes(selected as (typeof CLOUD_SETUP_KINDS)[number]) ? selected : "gemini";
+    $("setup-cloud-name-hint").textContent = t("optional");
+    this.updateCloudFields();
+  }
+
+  private cloudKindName(kind: string): string {
+    const key = CLOUD_KIND_TEXT[kind];
+    return key ? t(key).replace(/ (–|\().*$/, "") : kind;
+  }
+
+  private updateCloudFields() {
+    const kind = $<HTMLSelectElement>("setup-cloud-kind").value;
+    const baseInput = $<HTMLInputElement>("setup-cloud-baseurl");
+    const modelInput = $<HTMLInputElement>("setup-cloud-model");
+    baseInput.placeholder =
+      kind === "gemini"
+        ? t("geminiUrl")
+        : kind === "generic"
+          ? t("genericUrl")
+          : t("providerDefaultUrl");
+    modelInput.placeholder = kind === "gemini" ? t("modelPlaceholderGemini") : t("modelPlaceholderDefault");
+    $("setup-cloud-note").textContent = t("cloudNote", { name: this.cloudKindName(kind) });
+  }
+
+  private setMode(mode: SetupMode) {
+    this.mode = mode;
+    for (const btn of document.querySelectorAll<HTMLElement>("#setup [data-setup-mode]")) {
+      const on = btn.dataset.setupMode === mode;
+      btn.classList.toggle("active", on);
+      btn.setAttribute("aria-selected", String(on));
+    }
+    $("setup-local").hidden = mode !== "local";
+    $("setup-cloud").hidden = mode !== "cloud";
+    $("setup-intro").textContent = mode === "cloud" ? t("introCloud") : t("introLocal");
+    $("setup-error").textContent = "";
+    const startBtn = $<HTMLButtonElement>("btn-setup-start");
+    if (mode === "cloud") {
+      startBtn.disabled = false;
+      startBtn.textContent = t("apply");
+    } else {
+      startBtn.disabled = !this.info || !this.ollama;
+      if (this.info && this.ollama) this.describeChoice();
+      else startBtn.textContent = t("setUp");
+    }
+  }
+
+  private setCloudTestHint(text: string, tone: "" | "ok" | "bad" = "") {
+    const el = $("setup-cloud-test-result");
+    el.textContent = text;
+    el.className = `hint ${tone}`;
+  }
+
+  private async testCloud() {
+    const kind = $<HTMLSelectElement>("setup-cloud-kind").value;
+    const baseUrl = $<HTMLInputElement>("setup-cloud-baseurl").value.trim();
+    const apiKey = $<HTMLInputElement>("setup-cloud-apikey").value.trim();
+    const model = $<HTMLInputElement>("setup-cloud-model").value.trim();
+    this.setCloudTestHint(t("checkingProvider", { name: this.cloudKindName(kind) }));
+    try {
+      const r = await invoke<EndpointCheck>("check_provider", { kind, baseUrl, apiKey, model });
+      const list = $("setup-cloud-model-list");
+      list.innerHTML = "";
+      for (const m of r.models) {
+        const o = document.createElement("option");
+        o.value = m;
+        list.appendChild(o);
+      }
+      let text = r.message;
+      if (r.reachable && model && r.models.length && !r.models.includes(model)) {
+        text += `\n${t("modelNotOnServer", { model })}`;
+      }
+      this.setCloudTestHint(text, r.reachable ? "ok" : "bad");
+    } catch (e) {
+      this.setCloudTestHint(typeof e === "string" ? e : e instanceof Error ? e.message : String(e), "bad");
+    }
+  }
+
   async open() {
     this.host.show(true);
     $("setup-error").textContent = "";
+    this.fillCloudKinds("gemini");
+    $<HTMLInputElement>("setup-cloud-name").value = "";
+    $<HTMLInputElement>("setup-cloud-apikey").value = "";
+    $<HTMLInputElement>("setup-cloud-baseurl").value = "";
+    $<HTMLInputElement>("setup-cloud-model").value = "";
+    $("setup-cloud-model-list").innerHTML = "";
+    this.setCloudTestHint("");
+    this.setMode("local");
+
     this.setStep("step-hw", "active", t("checking"));
     this.setStep("step-model", "pending", "");
     this.setStep("step-ollama", "pending", "");
@@ -370,7 +553,9 @@ export class SetupWizard {
           ? t("installedStarting")
           : t("notInstalled"),
     );
-    $<HTMLButtonElement>("btn-setup-start").disabled = false;
+    if (this.mode === "local") {
+      $<HTMLButtonElement>("btn-setup-start").disabled = false;
+    }
   }
 
   private describeChoice() {
@@ -388,7 +573,12 @@ export class SetupWizard {
   }
 
   async run() {
-    if (this.running || !this.ollama) return;
+    if (this.running) return;
+    if (this.mode === "cloud") {
+      await this.runCloud();
+      return;
+    }
+    if (!this.ollama) return;
     this.running = true;
     const model = $<HTMLSelectElement>("setup-model").value;
     const startBtn = $<HTMLButtonElement>("btn-setup-start");
@@ -422,6 +612,40 @@ export class SetupWizard {
       startBtn.disabled = false;
       $<HTMLSelectElement>("setup-model").disabled = false;
       $("btn-setup-cancel").textContent = t("later");
+    }
+  }
+
+  private async runCloud() {
+    const kind = $<HTMLSelectElement>("setup-cloud-kind").value;
+    const name = $<HTMLInputElement>("setup-cloud-name").value.trim();
+    const apiKey = $<HTMLInputElement>("setup-cloud-apikey").value.trim();
+    const baseUrl = $<HTMLInputElement>("setup-cloud-baseurl").value.trim();
+    const model = $<HTMLInputElement>("setup-cloud-model").value.trim();
+    if (!apiKey) {
+      $("setup-error").textContent = t("apiKeyRequired", { name: this.cloudKindName(kind) });
+      return;
+    }
+    if (kind === "generic" && !baseUrl) {
+      $("setup-error").textContent = t("baseUrlRequired");
+      return;
+    }
+    if (!model) {
+      $("setup-error").textContent = t("modelRequired");
+      return;
+    }
+    $("setup-error").textContent = "";
+    this.running = true;
+    const startBtn = $<HTMLButtonElement>("btn-setup-start");
+    startBtn.disabled = true;
+    try {
+      await this.host.doneCloud({ name, kind, model, baseUrl, apiKey });
+      this.close(true);
+    } catch (e) {
+      const msg = typeof e === "string" ? e : e instanceof Error ? e.message : String(e);
+      $("setup-error").textContent = t("failed", { msg });
+    } finally {
+      this.running = false;
+      startBtn.disabled = false;
     }
   }
 

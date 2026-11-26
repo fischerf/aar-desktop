@@ -52,7 +52,7 @@ impl PyRuntime {
     }
 
     pub fn command(&self) -> Command {
-        let mut cmd = Command::new(&self.python);
+        let mut cmd = crate::platform::command(&self.python);
         cmd.envs(self.env());
         cmd
     }

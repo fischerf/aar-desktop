@@ -502,10 +502,12 @@ export function prettyJson(v: unknown): string {
 const DOC_EXT = "pdf|md|markdown|txt|html?|rtf|odt|docx?|xlsx?|ods|pptx?|csv|json|xml|png|jpe?g|gif|webp|svg";
 // Quoted paths may contain spaces; unquoted ones end at whitespace.
 const QUOTE = "\"'`„“”";
-const QUOTED_PATH = new RegExp(String.raw`[${QUOTE}]([A-Za-z]:[\\/][^${QUOTE}\r\n]*?\.(?:${DOC_EXT}))[${QUOTE}]`, "gi");
-const PLAIN_PATH = new RegExp(String.raw`(?<![\w])[A-Za-z]:[\\/][^\s${QUOTE}<>|*?]*?\.(?:${DOC_EXT})(?![\w])`, "gi");
+// Absolute paths: `C:\…` / `C:/…` (Windows) or `/…` (Linux; not inside URLs or relative paths).
+const ROOT = String.raw`(?:[A-Za-z]:[\\/]|/)`;
+const QUOTED_PATH = new RegExp(String.raw`[${QUOTE}](${ROOT}[^${QUOTE}\r\n]*?\.(?:${DOC_EXT}))[${QUOTE}]`, "gi");
+const PLAIN_PATH = new RegExp(String.raw`(?<![\w/:.~-])${ROOT}[^\s${QUOTE}<>|*?]*?\.(?:${DOC_EXT})(?![\w])`, "gi");
 
-/** Windows paths of documents mentioned in `text`. */
+/** Absolute paths of documents mentioned in `text`. */
 export function filePathsIn(text: string): string[] {
   const out = new Set<string>();
   for (const m of text.matchAll(QUOTED_PATH)) out.add(m[1]);

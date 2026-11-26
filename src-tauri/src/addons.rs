@@ -67,6 +67,7 @@ pub struct Browsers {
     pub chrome: Option<String>,
 }
 
+#[cfg(windows)]
 pub fn browsers() -> Browsers {
     let find = |rel: &str| -> Option<String> {
         ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"]
@@ -79,6 +80,22 @@ pub fn browsers() -> Browsers {
     Browsers {
         edge: find(r"Microsoft\Edge\Application\msedge.exe"),
         chrome: find(r"Google\Chrome\Application\chrome.exe"),
+    }
+}
+
+/// Linux: the first browser of each family on PATH (`{chrome}` may also be
+/// Chromium – both speak the DevTools protocol).
+#[cfg(not(windows))]
+pub fn browsers() -> Browsers {
+    let find = |names: &[&str]| -> Option<String> {
+        names
+            .iter()
+            .find_map(|n| crate::agent_process::resolve_program(n).ok())
+            .map(|p| p.to_string_lossy().into_owned())
+    };
+    Browsers {
+        edge: find(&["microsoft-edge-stable", "microsoft-edge"]),
+        chrome: find(&["google-chrome-stable", "google-chrome", "chromium", "chromium-browser"]),
     }
 }
 

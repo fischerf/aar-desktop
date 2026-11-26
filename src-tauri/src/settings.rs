@@ -48,6 +48,10 @@ pub struct Settings {
     /// when `provider` is that type; aar gets it as the provider's environment
     /// variable (never on the command line or in the log).
     pub api_keys: std::collections::BTreeMap<String, String>,
+    /// Named custom providers saved in the widget settings (e.g. corporate
+    /// Gemini or OpenAI-compatible gateways), referenced as `custom:<id>` in
+    /// `provider`.
+    pub custom_providers: Vec<CustomProvider>,
     /// Tools the user allowed permanently ("Immer erlauben"): the widget
     /// answers aar's permission requests for them itself (raw tool names,
     /// e.g. `windows__click_element`).
@@ -82,6 +86,7 @@ impl Default for Settings {
             photo_folders: vec![],
             photo_model: String::new(),
             api_keys: Default::default(),
+            custom_providers: vec![],
             allowed_tools: vec![],
             anchor_right: None,
             anchor_bottom: None,
@@ -89,6 +94,25 @@ impl Default for Settings {
             expanded_height: None,
         }
     }
+}
+
+/// A named custom provider profile saved in the widget settings (e.g. a
+/// corporate Gemini or OpenAI-compatible gateway).
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CustomProvider {
+    /// Unique slug; referenced in `Settings.provider` as `custom:<id>`.
+    pub id: String,
+    /// User-chosen display name (e.g. "gemini 3.1").
+    pub name: String,
+    /// Underlying aar provider type: "gemini" | "openai" | "anthropic" | "generic".
+    pub kind: String,
+    /// Model identifier (e.g. "gemini-3.1-flash-lite").
+    pub model: String,
+    /// Endpoint / base URL (empty = provider default).
+    pub base_url: String,
+    /// API key passed to aar via environment variable (never on the CLI).
+    pub api_key: String,
 }
 
 /// A tool server (MCP) added under Settings → Tools.
@@ -167,14 +191,24 @@ impl Settings {
         std::fs::write(path, json).map_err(|e| e.to_string())
     }
 
+    /// The active custom provider when `provider` is `custom:<id>`.
+    pub fn selected_custom_provider(&self) -> Option<&CustomProvider> {
+        let id = self.provider.trim().strip_prefix("custom:")?;
+        self.custom_providers.iter().find(|p| p.id == id)
+    }
+
     /// Full argument list: user args + connection overrides as aar CLI flags.
     pub fn effective_args(&self) -> Vec<String> {
         let mut args = self.agent_args.clone();
+        let (provider, model, base_url) = match self.selected_custom_provider() {
+            Some(cp) => (cp.kind.as_str(), cp.model.as_str(), cp.base_url.as_str()),
+            None => (self.provider.as_str(), self.model.as_str(), self.base_url.as_str()),
+        };
         for (flag, value) in [
-            ("--config", &self.config_path),
-            ("--provider", &self.provider),
-            ("--model", &self.model),
-            ("--base-url", &self.base_url),
+            ("--config", self.config_path.as_str()),
+            ("--provider", provider),
+            ("--model", model),
+            ("--base-url", base_url),
         ] {
             let v = value.trim();
             if !v.is_empty() && !args.iter().any(|a| a == flag) {
@@ -189,9 +223,15 @@ impl Settings {
         args
     }
 
-    /// `(variable, key)` for aar when `provider` is a cloud provider type (not
-    /// a profile of the aar config, which brings its own key) with a stored key.
+    /// `(variable, key)` for aar when `provider` is a custom provider or a
+    /// cloud provider type (not a profile of the aar config, which brings its
+    /// own key) with a stored key.
     pub fn api_key_env(&self, profile_keys: &[String]) -> Option<(&'static str, String)> {
+        if let Some(cp) = self.selected_custom_provider() {
+            let key = cp.api_key.trim();
+            let var = crate::llm_config::api_key_env(cp.kind.trim())?;
+            return (!key.is_empty()).then(|| (var, key.to_string()));
+        }
         let kind = self.provider.trim();
         if !crate::llm_config::CLOUD_KINDS.contains(&kind) || profile_keys.iter().any(|k| k == kind) {
             return None;
@@ -332,11 +372,40 @@ mod tests {
     }
 
     #[test]
+    fn custom_provider_args_and_api_key() {
+        let mut s = Settings::default();
+        s.custom_providers.push(CustomProvider {
+            id: "gemini-3-1".into(),
+            name: "gemini 3.1".into(),
+            kind: "gemini".into(),
+            model: "gemini-3.1-flash-lite".into(),
+            base_url: "https://gateway.example/gemini/gemini-3.x-flash-lite".into(),
+            api_key: "secret-key".into(),
+        });
+        s.provider = "custom:gemini-3-1".into();
+        assert_eq!(
+            s.effective_args(),
+            vec![
+                "acp",
+                "--provider",
+                "gemini",
+                "--model",
+                "gemini-3.1-flash-lite",
+                "--base-url",
+                "https://gateway.example/gemini/gemini-3.x-flash-lite",
+            ]
+        );
+        // Key goes to GEMINI_API_KEY even if the aar config has a "gemini" profile, and never on CLI.
+        assert_eq!(s.api_key_env(&["gemini".into()]), Some(("GEMINI_API_KEY", "secret-key".into())));
+        assert!(!serde_json::to_string(&s.effective_args()).unwrap().contains("secret-key"));
+    }
+
+    #[test]
     fn old_settings_files_load_without_context_window() {
         let s: Settings = serde_json::from_str(r#"{"provider":"ollama"}"#).unwrap();
         assert_eq!(s.context_window, 0);
         assert!(s.autostart, "existing installs get autostart like new ones");
         assert!(!s.effective_args().contains(&"--context-window".to_string()));
-        assert!(s.language.is_empty() && s.disabled_extensions.is_empty() && s.mcp_servers.is_empty());
+        assert!(s.language.is_empty() && s.disabled_extensions.is_empty() && s.mcp_servers.is_empty() && s.custom_providers.is_empty());
     }
 }

@@ -40,26 +40,55 @@ Download `Aar_<version>_x64-setup.exe` from the [Releases page](../../../release
 - Aar Desktop needs **Windows 11** (64-bit). WebView2, which draws the chat window, is already part of
   Windows 11.
 
+### Installing on Linux (preview)
+
+The Releases page also has Linux packages for x86-64 (glibc 2.35 or newer, e.g. Ubuntu/Kubuntu 22.04+, Debian 12+,
+Fedora 36+). Like the Windows installer, they bring the aar agent and its own Python along.
+
+- **AppImage** (`Aar_<version>_amd64.AppImage`): one file for most distributions. Make it executable
+  (`chmod +x`, or *Properties → Permissions* in the file manager) and start it.
+- **rpm** (`Aar-<version>-1.x86_64.rpm`): Fedora, openSUSE and others; installs to `/usr/bin` and `/usr/lib/Aar`.
+- **tar.gz** (`Aar_<version>_x86_64.tar.gz`): unpack it where the program should stay and run `./install.sh` –
+  Aar then appears in the application menu and as the command `aar-desktop`; `./uninstall.sh` removes it again.
+  Needs WebKitGTK 4.1 from your distribution (`sudo apt install libwebkit2gtk-4.1-0 libayatana-appindicator3-1` on
+  Ubuntu/Kubuntu); `install.sh` names the package if it is missing.
+
+What is different on Linux:
+
+- Aar **cannot operate other programs** yet (no reading windows, clicking or typing – the Paint example is not
+  offered). It works with files, commands (bash) and, with the web tool servers, web pages.
+- The setup assistant installs **Ollama without root rights** into `~/.local` and Aar starts it when it starts
+  (there is no system service). An Ollama you installed yourself is used as well.
+- On **Wayland** the eagle runs through XWayland so it can stay in the bottom-right corner on top of other windows.
+  The keyboard shortcut may only work while Aar is in front; add a shortcut for the command `aar-desktop` in the
+  system settings instead – starting it again opens and closes Aar.
+- Dictation with Win+H does not exist; files open with your default programs (`xdg-open`).
+
 ### The setup assistant
 
-On the first start the setup assistant opens by itself. It goes through four steps:
+On the first start the setup assistant opens by itself. You can choose between two tabs:
 
-1. **Check computer** – reads how much memory (RAM) your PC has and which graphics card it uses, including the
-   real amount of video memory.
-2. **Choose language model** – recommends a model that suits your computer (see
-   [Choosing a model](#choosing-a-local-model)). You can pick a different one from the list.
-3. **Model server (Ollama)** – if [Ollama](https://ollama.com/) is not installed yet, the assistant installs it
-   quietly for your user account (about 2 GB download) and starts it.
-4. **Download model** – downloads the chosen model and shows the progress.
+- **Local (Ollama)** – goes through four steps:
+  1. **Check computer** – reads how much memory (RAM) your PC has and which graphics card it uses, including the
+     real amount of video memory.
+  2. **Choose language model** – recommends a model that suits your computer (see
+     [Choosing a model](#choosing-a-local-model)). You can pick a different one from the list.
+  3. **Model server (Ollama)** – if [Ollama](https://ollama.com/) is not installed yet, the assistant installs it
+     quietly for your user account (about 2 GB download) and starts it.
+  4. **Download model** – downloads the chosen model and shows the progress.
+- **Cloud / Custom provider** – connect Aar directly to Anthropic Claude, OpenAI, Google Gemini (including custom
+  Gemini HTTP gateways) or an OpenAI-compatible service without installing Ollama. Enter an optional name, your API
+  key, an optional server address, and the model, test the connection with *Test* and apply it.
 
 You can close the assistant with *Later* and open it again at any time under ⚙ → *General* →
-*Setup assistant …*. If you would rather use a cloud provider, skip the assistant and enter your API key under
-⚙ → *Language model connection* instead (see [section 8](#8-language-models-and-providers)).
+*Setup assistant …*. You can also manage providers and add multiple named custom providers later under
+⚙ → *Language model connection* (see [section 8](#8-language-models-and-providers)).
 
-### Starting with Windows
+### Starting automatically
 
-Aar starts automatically when you sign in to Windows. You can turn this off under ⚙ → *General* →
-*Start when signing in to Windows*. The uninstaller removes the autostart entry.
+Aar starts automatically when you sign in. You can turn this off under ⚙ → *General* →
+*Start automatically when signing in*. On Windows the uninstaller removes the autostart entry; on Linux it is
+`~/.config/autostart/aar-desktop.desktop` (removed by `uninstall.sh` of the tar.gz).
 
 ### Uninstalling
 
@@ -304,18 +333,23 @@ The small models and Ministral 3 are fine for looking things up, listing files a
 programs such as Paint, use Qwen 3.8. Ministral 3 needs a graphics card; on the processor alone it is far too slow. With a graphics card, a request takes from a few seconds to a few minutes. Without one, the small
 models take about 4 to 30 times longer.
 
-### Using a cloud provider
+### Using a cloud or custom provider
 
 Under ⚙ → *General* → *Language model connection* → *Profile / provider* you can choose:
 
+- a **custom provider** you saved in Aar Desktop (via *+ Custom provider* or the setup assistant's *Cloud / Custom
+  provider* tab – useful when you want several named endpoints, e.g. multiple custom Gemini or OpenAI-compatible
+  gateways),
 - a **profile** from your aar configuration (`~/.aar/config.json`), or
 - a **provider**: Ollama, Anthropic, OpenAI, Google Gemini or any OpenAI-compatible service.
 
-For cloud providers, enter your **API key**. *Test* checks the key and lists the available models; for Ollama it
-checks that the server is reachable and which models are installed. You can also override the server address
-and the model.
+For cloud and custom providers, enter your **API key** and **model** (and the **server address** when using a
+custom gateway). *Test* checks the key and lists available models when the server exposes a model list; for custom
+Gemini gateways (`base_url` set) and single-model OpenAI-compatible endpoints without a `/models` route, *Test*
+sends a minimal probe request directly to the endpoint. For Ollama it checks that the server is reachable and which
+models are installed.
 
-Your API key is stored in Aar's settings and passed to the agent only as an environment variable
+Your API keys are stored in Aar's settings and passed to the agent only as environment variables
 (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` or `GENERIC_API_KEY`). Aar Desktop never changes your
 aar configuration file.
 
@@ -330,10 +364,10 @@ Open the settings with ⚙ in the header of the chat bubble.
 | Section | Settings |
 |---|---|
 | This conversation | Working mode, model and reasoning effort for the current conversation |
-| Abilities | *Operate programs on this PC*; *Start when signing in to Windows* |
+| Abilities | *Operate programs on this PC* (Windows only); *Start automatically when signing in* |
 | Permissions | What Aar may do without asking (always / this conversation), each with *Revoke*; *Revoke all* |
-| Language | Display language: automatic (same as Windows), English, German or Simplified Chinese |
-| Language model connection | Profile / provider, API key, server address, model, *Test*, *Setup assistant …* |
+| Language | Display language: automatic (system language), English, German or Simplified Chinese |
+| Language model connection | Profile / provider, named custom providers (*+ Custom provider*), API key, server address, model, *Test*, *Setup assistant …* |
 | Advanced | aar configuration file, agent program, arguments, working folder, keyboard shortcut |
 | Troubleshooting | *Show conversation history*, *Show log*, copy version details, *Quit Aar* |
 
@@ -363,6 +397,9 @@ The settings are saved in `%APPDATA%\de.aar.ui\settings.json`.
 | Photo index and thumbnails | `%LOCALAPPDATA%\de.aar.ui\photos` |
 
 Everything Aar downloads after installation lives outside the program folder, so updates keep it.
+
+On **Linux** the same files are in `~/.config/de.aar.ui` (settings, your `rules.md`) and
+`~/.local/share/de.aar.ui` (log, extensions, tool servers, Node.js, photo index); Ollama goes to `~/.local`.
 
 **Privacy:** with a local model, nothing you type, no file and no photo leaves your PC. With a cloud provider,
 your messages and the content Aar reads for a task are sent to that provider. Photo descriptions are always

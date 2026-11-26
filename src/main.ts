@@ -16,12 +16,22 @@ import {
 import { Mascot, moodLabel, type Mood } from "./mascot";
 import { renderMarkdown } from "./markdown";
 import { describeTool, filePathsIn, forgetDesktop, learnFromTool, prettyJson, toolFileCandidates, toolOutputText } from "./tools";
-import { fmtBytes, hasModel, SetupWizard, type OllamaStatus } from "./setup";
+import { fmtBytes, hasModel, SetupWizard, type CloudSetupResult, type OllamaStatus } from "./setup";
 import { AddonsView, splitArgs, type AddonSettings } from "./addons";
 import { photoResultCard, PhotosView } from "./photos";
 import { applyStatic, lang, LANG_NAMES, LANGS, locale, onLangChange, resolveLang, setLang, strings } from "./i18n";
 import { Grants, isRisky, permText, renderGrantList, toolLabel } from "./permissions";
 import { HistoryView } from "./history";
+import { isWindows, loadPlatform } from "./platform";
+
+interface CustomProvider {
+  id: string;
+  name: string;
+  kind: string;
+  model: string;
+  baseUrl: string;
+  apiKey: string;
+}
 
 interface Settings {
   agentCommand: string;
@@ -45,6 +55,8 @@ interface Settings {
   photoModel?: string;
   /** API keys per cloud provider type (anthropic, openai, gemini, generic). */
   apiKeys?: Record<string, string>;
+  /** Named custom providers (e.g. corporate Gemini or OpenAI-compatible gateways). */
+  customProviders?: CustomProvider[];
   /** Tools allowed permanently (the widget answers aar's permission requests). */
   allowedTools?: string[];
   anchorRight?: number | null;
@@ -67,10 +79,10 @@ const t = strings({
     abilities: "Fähigkeiten",
     desktopControl: "Programme auf diesem PC bedienen",
     desktopControlHint: "Aar kann Fenster lesen, Programme starten, klicken und tippen – und fragt vor jeder Änderung um Erlaubnis.",
-    autostart: "Beim Anmelden an Windows starten",
+    autostart: "Beim Anmelden automatisch starten",
     languageHead: "Sprache",
     languageLabel: "Sprache der Oberfläche",
-    languageAuto: "Automatisch (wie Windows)",
+    languageAuto: "Automatisch (Systemsprache)",
     connectionHead: "Sprachmodell-Verbindung",
     profile: "Profil / Anbieter",
     serverAddress: "Server-Adresse",
@@ -92,9 +104,9 @@ const t = strings({
     hotkey: "Tastenkürzel",
     troubleshooting: "Fehlersuche",
     showSessions: "Gesprächsverläufe anzeigen",
-    tipSessions: "Ordner mit den gespeicherten Gesprächen im Explorer öffnen",
+    tipSessions: "Ordner mit den gespeicherten Gesprächen öffnen",
     showLog: "Protokoll anzeigen",
-    tipLog: "Protokoll von Aar (Warnungen und Fehler) im Explorer zeigen",
+    tipLog: "Protokoll von Aar (Warnungen und Fehler) im Ordner zeigen",
     copy: "Kopieren",
     copied: "Kopiert ✓",
     tipCopyVersion: "Versionsangaben kopieren, z. B. für eine Fehlermeldung",
@@ -125,6 +137,8 @@ const t = strings({
     mcpAdd: "Hinzufügen",
     setupTitle: "Einrichtung",
     setupIntro: "Aar nutzt ein Sprachmodell, das direkt auf diesem Computer läuft – deine Daten bleiben hier. Ich richte alles automatisch ein.",
+    setupTabLocal: "Lokal (Ollama)",
+    setupTabCloud: "Cloud / Eigener Anbieter",
     stepHw: "Computer prüfen",
     stepModel: "Sprachmodell wählen",
     stepOllama: "Modell-Server (Ollama)",
@@ -183,6 +197,8 @@ const t = strings({
     send: "Senden",
     working: "Aar arbeitet…",
     askMe: "Frag mich etwas… (Diktieren: Win+H)",
+    askMePlain: "Frag mich etwas…",
+    hotkeyLinuxHint: "Unter Wayland wirkt das Kürzel oft nur, wenn Aar vorne ist. Dann in den Systemeinstellungen ein Kürzel für den Befehl „aar-desktop“ anlegen – ein zweiter Start öffnet und schließt Aar.",
     notConnected: "Nicht verbunden",
     optModel: "Modell (nur dieses Gespräch)",
     optMode: "Arbeitsweise",
@@ -198,8 +214,16 @@ const t = strings({
     ctxTipUsed: "Kontext: {used} Tokens belegt (Größe unbekannt).",
     standard: "Standard",
     providerType: "{name} (Provider-Typ)",
+    groupCustom: "Eigene Anbieter",
     groupProfiles: "Profile aus der aar-Konfiguration",
     groupProviders: "Anbieter",
+    addCustomProvider: "+ Eigener Anbieter",
+    customName: "Name",
+    customNamePlaceholder: "z. B. gemini 3.1",
+    customType: "Anbieter-Typ",
+    deleteCustom: "Entfernen",
+    customNameRequired: "Bitte einen Namen für den Anbieter eintragen.",
+    baseUrlRequired: "Bitte die Server-Adresse eintragen.",
     kindOllama: "Ollama – Modell auf diesem PC",
     kindAnthropic: "Anthropic Claude – Cloud",
     kindOpenai: "OpenAI – Cloud",
@@ -209,6 +233,7 @@ const t = strings({
     apiKeyHint: "(bleibt auf diesem PC)",
     cloudNote: "☁ Mit {name} gehen deine Nachrichten und alles, was Aar liest (Fenster, Dateien, Webseiten), an diesen Dienst. Die Nutzung kostet dort meist Geld.",
     providerDefaultUrl: "leer = Standardadresse des Anbieters",
+    geminiUrl: "leer = Google Gemini, oder eigene Gateway-URL",
     genericUrl: "z. B. https://example.com/v1/chat/completions",
     modelPick: "nach „Testen“ aus der Liste wählen",
     modelRequired: "Bitte ein Modell eintragen (die Liste gibt es über „Testen“).",
@@ -270,10 +295,10 @@ const t = strings({
     abilities: "Abilities",
     desktopControl: "Operate programs on this PC",
     desktopControlHint: "Aar can read windows, start programs, click and type – and asks for permission before every change.",
-    autostart: "Start when signing in to Windows",
+    autostart: "Start automatically when signing in",
     languageHead: "Language",
     languageLabel: "Display language",
-    languageAuto: "Automatic (same as Windows)",
+    languageAuto: "Automatic (system language)",
     connectionHead: "Language model connection",
     profile: "Profile / provider",
     serverAddress: "Server address",
@@ -295,9 +320,9 @@ const t = strings({
     hotkey: "Keyboard shortcut",
     troubleshooting: "Troubleshooting",
     showSessions: "Show conversation history",
-    tipSessions: "Open the folder with the saved conversations in Explorer",
+    tipSessions: "Open the folder with the saved conversations",
     showLog: "Show log",
-    tipLog: "Show Aar's log (warnings and errors) in Explorer",
+    tipLog: "Show Aar's log (warnings and errors) in its folder",
     copy: "Copy",
     copied: "Copied ✓",
     tipCopyVersion: "Copy the version details, e.g. for a bug report",
@@ -328,6 +353,8 @@ const t = strings({
     mcpAdd: "Add",
     setupTitle: "Setup",
     setupIntro: "Aar uses a language model that runs right on this computer – your data stays here. I'll set everything up automatically.",
+    setupTabLocal: "Local (Ollama)",
+    setupTabCloud: "Cloud / Custom provider",
     stepHw: "Check computer",
     stepModel: "Choose language model",
     stepOllama: "Model server (Ollama)",
@@ -385,6 +412,8 @@ const t = strings({
     send: "Send",
     working: "Aar is working…",
     askMe: "Ask me something… (dictate: Win+H)",
+    askMePlain: "Ask me something…",
+    hotkeyLinuxHint: "On Wayland the shortcut often only works while Aar is in front. Then add a shortcut for the command “aar-desktop” in the system settings – starting it again opens and closes Aar.",
     notConnected: "Not connected",
     optModel: "Model (this conversation only)",
     optMode: "Way of working",
@@ -400,8 +429,16 @@ const t = strings({
     ctxTipUsed: "Context: {used} tokens in use (size unknown).",
     standard: "Default",
     providerType: "{name} (provider type)",
+    groupCustom: "Custom providers",
     groupProfiles: "Profiles from the aar configuration",
     groupProviders: "Providers",
+    addCustomProvider: "+ Custom provider",
+    customName: "Name",
+    customNamePlaceholder: "e.g. gemini 3.1",
+    customType: "Provider type",
+    deleteCustom: "Remove",
+    customNameRequired: "Please enter a name for the provider.",
+    baseUrlRequired: "Please enter the server address.",
     kindOllama: "Ollama – model on this PC",
     kindAnthropic: "Anthropic Claude – cloud",
     kindOpenai: "OpenAI – cloud",
@@ -411,6 +448,7 @@ const t = strings({
     apiKeyHint: "(stays on this PC)",
     cloudNote: "☁ With {name}, your messages and everything Aar reads (windows, files, web pages) go to that service. Using it usually costs money there.",
     providerDefaultUrl: "empty = the provider's default address",
+    geminiUrl: "empty = Google Gemini, or custom gateway URL",
     genericUrl: "e.g. https://example.com/v1/chat/completions",
     modelPick: "pick one from the list after “Test”",
     modelRequired: "Please enter a model (“Test” shows the list).",
@@ -472,10 +510,10 @@ const t = strings({
     abilities: "能力",
     desktopControl: "操作这台电脑上的程序",
     desktopControlHint: "Aar 可以读取窗口、启动程序、点击和输入 – 每次更改前都会征求你的同意。",
-    autostart: "登录 Windows 时启动",
+    autostart: "登录时自动启动",
     languageHead: "语言",
     languageLabel: "界面语言",
-    languageAuto: "自动（与 Windows 相同）",
+    languageAuto: "自动（系统语言）",
     connectionHead: "语言模型连接",
     profile: "配置 / 提供方",
     serverAddress: "服务器地址",
@@ -497,9 +535,9 @@ const t = strings({
     hotkey: "快捷键",
     troubleshooting: "故障排查",
     showSessions: "显示对话记录",
-    tipSessions: "在资源管理器中打开保存对话的文件夹",
+    tipSessions: "打开保存对话的文件夹",
     showLog: "显示日志",
-    tipLog: "在资源管理器中显示 Aar 的日志（警告和错误）",
+    tipLog: "在文件夹中显示 Aar 的日志（警告和错误）",
     copy: "复制",
     copied: "已复制 ✓",
     tipCopyVersion: "复制版本信息，例如用于报告问题",
@@ -529,7 +567,9 @@ const t = strings({
     mcpHeadersHint: "（每行一个：名称: 值）",
     mcpAdd: "添加",
     setupTitle: "设置",
-    setupIntro: "Aar 使用直接在这台电脑上运行的语言模型 – 你的数据留在本机。我会自动完成所有设置。",
+    setupIntro: "Aar 使用直接运行在这台电脑上的语言模型 – 你的数据不会离开这里。我会自动完成所有设置。",
+    setupTabLocal: "本地 (Ollama)",
+    setupTabCloud: "云端 / 自定义提供方",
     stepHw: "检查电脑",
     stepModel: "选择语言模型",
     stepOllama: "模型服务器（Ollama）",
@@ -587,6 +627,8 @@ const t = strings({
     send: "发送",
     working: "Aar 正在工作…",
     askMe: "问我点什么…（语音输入：Win+H）",
+    askMePlain: "问我点什么…",
+    hotkeyLinuxHint: "在 Wayland 下，快捷键通常只在 Aar 位于前台时有效。此时请在系统设置中为命令“aar-desktop”添加快捷键 – 再次启动即可打开或关闭 Aar。",
     notConnected: "未连接",
     optModel: "模型（仅当前对话）",
     optMode: "工作方式",
@@ -602,8 +644,16 @@ const t = strings({
     ctxTipUsed: "上下文：已使用 {used} 个词元（大小未知）。",
     standard: "默认",
     providerType: "{name}（提供方类型）",
+    groupCustom: "自定义提供方",
     groupProfiles: "aar 配置中的配置",
     groupProviders: "提供方",
+    addCustomProvider: "+ 自定义提供方",
+    customName: "名称",
+    customNamePlaceholder: "例如 gemini 3.1",
+    customType: "提供方类型",
+    deleteCustom: "删除",
+    customNameRequired: "请填写提供方名称。",
+    baseUrlRequired: "请填写服务器地址。",
     kindOllama: "Ollama – 本机模型",
     kindAnthropic: "Anthropic Claude – 云端",
     kindOpenai: "OpenAI – 云端",
@@ -613,6 +663,7 @@ const t = strings({
     apiKeyHint: "（仅保存在本机）",
     cloudNote: "☁ 使用 {name} 时，你的消息以及 Aar 读取的所有内容（窗口、文件、网页）都会发送到该服务。该服务通常需要付费。",
     providerDefaultUrl: "留空 = 提供方的默认地址",
+    geminiUrl: "留空 = Google Gemini，或自定义网关地址",
     genericUrl: "例如 https://example.com/v1/chat/completions",
     modelPick: "点击“测试”后从列表中选择",
     modelRequired: "请填写模型（点击“测试”可查看列表）。",
@@ -854,6 +905,33 @@ async function preflight(status: (text: string) => void): Promise<boolean> {
       void openSetup();
       return false;
     }
+    // Saved custom provider chosen in the settings: check its key and endpoint.
+    const customProv = findCustomProvider(s.customProviders, s.provider);
+    if (customProv) {
+      const name = customProv.name || kindName(customProv.kind);
+      const toSettings: ErrorAction[] = [{ label: t("toSettings"), primary: true, run: () => void openSettings() }];
+      if (!customProv.apiKey.trim()) {
+        addError(t("apiKeyMissing", { name }), "", toSettings);
+        mascot.set("error", 5000);
+        return false;
+      }
+      const r = await invoke<EndpointCheck>("check_provider", {
+        kind: customProv.kind,
+        baseUrl: customProv.baseUrl,
+        apiKey: customProv.apiKey,
+        model: customProv.model,
+      });
+      if (!r.reachable) {
+        addError(t("providerProblem", { name }), r.message, toSettings);
+        mascot.set("error", 5000);
+        return false;
+      }
+      if (customProv.model && r.models.length && !r.models.includes(customProv.model)) {
+        addError(t("modelMissing", { model: customProv.model }), t("availableModels", { models: r.models.join(", ") }), toSettings);
+        return false;
+      }
+      return true;
+    }
     // Cloud provider chosen in the settings (not a profile): is the key there and valid?
     if (!profile && isCloud(s.provider)) {
       const name = kindName(s.provider);
@@ -864,7 +942,7 @@ async function preflight(status: (text: string) => void): Promise<boolean> {
         mascot.set("error", 5000);
         return false;
       }
-      const r = await invoke<EndpointCheck>("check_provider", { kind: s.provider, baseUrl: s.baseUrl, apiKey: key });
+      const r = await invoke<EndpointCheck>("check_provider", { kind: s.provider, baseUrl: s.baseUrl, apiKey: key, model: s.model });
       if (!r.reachable) {
         addError(t("providerProblem", { name }), r.message, toSettings);
         mascot.set("error", 5000);
@@ -930,6 +1008,8 @@ const isLocalUrl = (url: string) => /^(https?:\/\/)?(localhost|127\.0\.0\.1|\[::
 /** Server address + model aar talks to (settings, else the profile). */
 async function currentEndpoint(): Promise<{ url: string; model: string }> {
   const s = await invoke<Settings>("get_settings");
+  const customProv = findCustomProvider(s.customProviders, s.provider);
+  if (customProv) return { url: customProv.baseUrl, model: customProv.model };
   const info = await invoke<AarConfigInfo>("aar_config_info", { configPath: null });
   const profile = s.provider
     ? info.profiles.find((p) => p.key === s.provider)
@@ -1045,7 +1125,7 @@ function showSuggestions() {
     [t("sugLetter"), t("sugLetterPrompt")],
     [t("sugDownloads"), t("sugDownloadsPrompt")],
   ];
-  if (s?.desktopControl !== false) list.splice(1, 0, [t("sugPaint"), t("sugPaintPrompt")]);
+  if (isWindows() && s?.desktopControl !== false) list.splice(1, 0, [t("sugPaint"), t("sugPaintPrompt")]);
   if (s?.photoFolders?.length) list.push([t("sugPhotos"), t("sugPhotosPrompt")]);
   const row = document.createElement("div");
   row.className = "suggestions";
@@ -1725,7 +1805,7 @@ function updateComposer() {
   sendBtn.setAttribute("aria-label", busy ? t("tipCancel") : t("send"));
   sendBtn.disabled = !connected && !busy;
   input.disabled = !connected;
-  input.placeholder = connected ? (busy ? t("working") : t("askMe")) : t("notConnected");
+  input.placeholder = connected ? (busy ? t("working") : t(isWindows() ? "askMe" : "askMePlain")) : t("notConnected");
   refreshStatus(mascot.current);
 }
 
@@ -1988,6 +2068,29 @@ let aarConfig: AarConfigInfo | null = null;
 let apiKeys: Record<string, string> = {};
 /** Provider type whose key the API key field currently shows. */
 let keyKind = "";
+/** Draft list of named custom providers while the settings form is open. */
+let customProviders: CustomProvider[] = [];
+/** ID of the custom provider currently shown in the form ("" if not a custom provider). */
+let activeCustomId = "";
+
+const CUSTOM_PREFIX = "custom:";
+function findCustomProvider(list: CustomProvider[] | undefined, providerValue: string): CustomProvider | undefined {
+  if (!providerValue.startsWith(CUSTOM_PREFIX)) return undefined;
+  const id = providerValue.slice(CUSTOM_PREFIX.length);
+  return list?.find((p) => p.id === id);
+}
+function slugifyProviderId(name: string, existing: CustomProvider[]): string {
+  const base =
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 28) || "custom";
+  let id = base;
+  let n = 2;
+  while (existing.some((p) => p.id === id)) id = `${base}-${n++}`;
+  return id;
+}
 
 /** Provider types offered besides the aar config's profiles (aar --provider <type>). */
 const PROVIDER_KINDS = ["ollama", "anthropic", "openai", "gemini", "generic"];
@@ -2010,6 +2113,37 @@ function kindName(kind: string): string {
 
 const field = (id: string) => $<HTMLInputElement>(id);
 const providerSelect = $<HTMLSelectElement>("set-provider");
+const customKindSelect = $<HTMLSelectElement>("set-custom-kind");
+
+function fillCustomKinds(selected: string) {
+  customKindSelect.innerHTML = "";
+  for (const k of ["gemini", "openai", "anthropic", "generic"]) {
+    const o = document.createElement("option");
+    o.value = k;
+    o.textContent = kindLabel(k);
+    customKindSelect.appendChild(o);
+  }
+  customKindSelect.value = CLOUD_KINDS.includes(selected) ? selected : "gemini";
+}
+
+function flushCustomDraft() {
+  if (!activeCustomId) return;
+  const cp = customProviders.find((p) => p.id === activeCustomId);
+  if (!cp) return;
+  cp.name = field("set-custom-name").value.trim();
+  cp.kind = customKindSelect.value;
+  cp.apiKey = field("set-apikey").value.trim();
+  cp.baseUrl = field("set-baseurl").value.trim();
+  cp.model = field("set-model").value.trim();
+  const opt = providerSelect.querySelector<HTMLOptionElement>(`option[value="${CUSTOM_PREFIX}${cp.id}"]`);
+  if (opt) opt.textContent = customProviderLabel(cp);
+}
+
+function customProviderLabel(cp: CustomProvider): string {
+  const where = cp.baseUrl ? ` @ ${cp.baseUrl.replace(/^https?:\/\//, "").split("/")[0]}` : "";
+  const model = cp.model ? `/${cp.model}` : "";
+  return `${cp.name || t("customNamePlaceholder")} · ${cp.kind}${model}${where}`;
+}
 
 async function openSettings() {
   historyView.close();
@@ -2026,6 +2160,9 @@ async function openSettings() {
   field("set-model").value = loadedSettings.model;
   apiKeys = { ...(loadedSettings.apiKeys ?? {}) };
   keyKind = "";
+  customProviders = (loadedSettings.customProviders ?? []).map((p) => ({ ...p }));
+  activeCustomId = "";
+  fillCustomKinds("gemini");
   field("set-desktop").checked = loadedSettings.desktopControl;
   field("set-autostart").checked = loadedSettings.autostart;
   fillLanguages(loadedSettings.language ?? "");
@@ -2131,6 +2268,10 @@ async function loadAarConfig(selected: string) {
   };
   const def = defaultProfile();
   add("", `${t("standard")}${def ? ` – ${profileLabel(def)}` : ""}`);
+  if (customProviders.length) {
+    const g = group(t("groupCustom"));
+    for (const cp of customProviders) add(`${CUSTOM_PREFIX}${cp.id}`, customProviderLabel(cp), g);
+  }
   if (aarConfig.profiles.length) {
     const g = group(t("groupProfiles"));
     for (const p of aarConfig.profiles) add(p.key, profileLabel(p), g);
@@ -2138,16 +2279,22 @@ async function loadAarConfig(selected: string) {
   const g = group(t("groupProviders"));
   const isProfile = (k: string) => aarConfig!.profiles.some((p) => p.key === k);
   for (const k of PROVIDER_KINDS) if (!isProfile(k)) add(k, kindLabel(k), g);
-  if (selected && !isProfile(selected) && !PROVIDER_KINDS.includes(selected)) add(selected, kindLabel(selected), g);
+  if (selected && !selected.startsWith(CUSTOM_PREFIX) && !isProfile(selected) && !PROVIDER_KINDS.includes(selected)) {
+    add(selected, kindLabel(selected), g);
+  }
   providerSelect.value = selected;
   setHint("config-hint", aarConfig.error ?? "", aarConfig.error ? "bad" : "");
   updateConnectionPlaceholders();
 }
 
-/** Provider type chosen in the picker ("" when it is a profile or the default). */
+function selectedCustom(): CustomProvider | undefined {
+  return findCustomProvider(customProviders, providerSelect.value);
+}
+
+/** Provider type chosen in the picker ("" when it is a profile, custom provider, or default). */
 function selectedKind(): string {
   const key = providerSelect.value;
-  if (!key || aarConfig?.profiles.some((p) => p.key === key)) return "";
+  if (!key || key.startsWith(CUSTOM_PREFIX) || aarConfig?.profiles.some((p) => p.key === key)) return "";
   return key;
 }
 
@@ -2166,20 +2313,41 @@ function profileLabel(p: AarProfile): string {
   return `${p.key || "inline"} · ${p.kind}/${p.model}${where}`;
 }
 
+function urlPlaceholderFor(kind: string, profileBaseUrl?: string): string {
+  if (kind === "ollama") return "http://localhost:11434";
+  if (kind === "generic") return t("genericUrl");
+  if (kind === "gemini") return t("geminiUrl");
+  if (isCloud(kind)) return t("providerDefaultUrl");
+  return profileBaseUrl || t("egUrl");
+}
+
 function updateConnectionPlaceholders() {
   if (isCloud(keyKind)) apiKeys[keyKind] = field("set-apikey").value.trim();
+  const cp = selectedCustom();
+  if (cp) {
+    keyKind = "";
+    activeCustomId = cp.id;
+    $("custom-provider-row").hidden = false;
+    field("set-custom-name").value = cp.name;
+    fillCustomKinds(cp.kind);
+    field("set-apikey").value = cp.apiKey;
+    field("set-baseurl").value = cp.baseUrl;
+    field("set-model").value = cp.model;
+    field("set-baseurl").placeholder = urlPlaceholderFor(cp.kind);
+    field("set-model").placeholder = t("modelPick");
+    $("apikey-row").hidden = false;
+    const note = $("cloud-note");
+    note.hidden = false;
+    note.textContent = t("cloudNote", { name: cp.name || kindName(cp.kind) });
+    return;
+  }
+  activeCustomId = "";
+  $("custom-provider-row").hidden = true;
   const kind = selectedKind();
   keyKind = kind;
   const p = selectedProfile();
   const cloud = isCloud(kind);
-  field("set-baseurl").placeholder =
-    kind === "ollama"
-      ? "http://localhost:11434"
-      : kind === "generic"
-        ? t("genericUrl")
-        : cloud
-          ? t("providerDefaultUrl")
-          : p?.baseUrl || t("egUrl");
+  field("set-baseurl").placeholder = urlPlaceholderFor(kind, p?.baseUrl);
   field("set-model").placeholder = cloud ? t("modelPick") : kind ? "" : p?.model || "";
   $("apikey-row").hidden = !cloud;
   field("set-apikey").value = cloud ? (apiKeys[kind] ?? "") : "";
@@ -2200,17 +2368,21 @@ function fillModelList(models: string[]) {
 }
 
 async function testConnection() {
-  const kind = selectedKind();
-  if (isCloud(kind)) {
-    setHint("test-result", t("checking", { url: kindName(kind) }));
+  flushCustomDraft();
+  const cp = selectedCustom();
+  const kind = cp ? cp.kind : selectedKind();
+  if (cp || isCloud(kind)) {
+    const label = cp?.name || kindName(kind);
+    setHint("test-result", t("checking", { url: label }));
+    const model = field("set-model").value.trim();
     const r = await invoke<EndpointCheck>("check_provider", {
       kind,
       baseUrl: field("set-baseurl").value.trim(),
       apiKey: field("set-apikey").value.trim(),
+      model,
     });
     fillModelList(r.models);
     let text = r.message;
-    const model = field("set-model").value.trim();
     if (r.reachable && model && r.models.length && !r.models.includes(model)) text += `\n${t("modelNotOnServer", { model })}`;
     setHint("test-result", text, r.reachable ? "ok" : "bad");
     return;
@@ -2294,6 +2466,47 @@ const wizard = new SetupWizard({
     busy = false;
     await connect(true);
     addSystem(t("setupDone", { model }));
+    mascot.set("happy", 3000);
+  },
+  async doneCloud(cfg: CloudSetupResult) {
+    const current = await invoke<Settings>("get_settings");
+    let next: Settings;
+    if (cfg.name || cfg.baseUrl) {
+      const existing = [...(current.customProviders ?? [])];
+      const displayName = cfg.name || `${kindName(cfg.kind)} (${cfg.model})`;
+      const id = slugifyProviderId(displayName, existing);
+      existing.push({
+        id,
+        name: displayName,
+        kind: cfg.kind,
+        model: cfg.model,
+        baseUrl: cfg.baseUrl,
+        apiKey: cfg.apiKey,
+      });
+      next = {
+        ...current,
+        provider: `${CUSTOM_PREFIX}${id}`,
+        model: "",
+        baseUrl: "",
+        contextWindow: 0,
+        customProviders: existing,
+      };
+    } else {
+      next = {
+        ...current,
+        provider: cfg.kind,
+        model: cfg.model,
+        baseUrl: "",
+        contextWindow: 0,
+        apiKeys: { ...(current.apiKeys ?? {}), [cfg.kind]: cfg.apiKey },
+      };
+    }
+    await invoke("save_settings", { settings: next });
+    if (busy && sessionId) client.cancel(sessionId);
+    await client.stop();
+    busy = false;
+    await connect(true);
+    addSystem(t("setupDone", { model: cfg.name ? `${cfg.name} (${cfg.model})` : cfg.model }));
     mascot.set("happy", 3000);
   },
 });
@@ -2393,14 +2606,32 @@ function renderSessionOptions() {
 
 async function saveSettings() {
   if (!loadedSettings) return;
+  flushCustomDraft();
+  const cp = selectedCustom();
   const kind = selectedKind();
-  if (isCloud(kind)) {
+  if (cp) {
+    const problem = !cp.name
+      ? t("customNameRequired")
+      : !cp.apiKey
+        ? t("apiKeyRequired", { name: cp.name })
+        : cp.kind === "generic" && !cp.baseUrl
+          ? t("baseUrlRequired")
+          : !cp.model
+            ? t("modelRequired")
+            : "";
+    if (problem) {
+      $("settings-error").textContent = problem;
+      return;
+    }
+  } else if (isCloud(kind)) {
     apiKeys[kind] = field("set-apikey").value.trim();
     const problem = !apiKeys[kind]
       ? t("apiKeyRequired", { name: kindName(kind) })
-      : !field("set-model").value.trim()
-        ? t("modelRequired")
-        : "";
+      : kind === "generic" && !field("set-baseurl").value.trim()
+        ? t("baseUrlRequired")
+        : !field("set-model").value.trim()
+          ? t("modelRequired")
+          : "";
     if (problem) {
       $("settings-error").textContent = problem;
       return;
@@ -2413,13 +2644,14 @@ async function saveSettings() {
     workingDir: field("set-cwd").value.trim(),
     hotkey: field("set-hotkey").value.trim() || "Ctrl+Alt+A",
     provider: providerSelect.value,
-    model: field("set-model").value.trim(),
-    baseUrl: field("set-baseurl").value.trim(),
+    model: cp ? "" : field("set-model").value.trim(),
+    baseUrl: cp ? "" : field("set-baseurl").value.trim(),
     configPath: field("set-config").value.trim(),
     desktopControl: field("set-desktop").checked,
     autostart: field("set-autostart").checked,
     language: $<HTMLSelectElement>("set-language").value,
     apiKeys: Object.fromEntries(Object.entries(apiKeys).filter(([, v]) => v)),
+    customProviders,
   };
   try {
     await invoke("save_settings", { settings: next });
@@ -2429,10 +2661,13 @@ async function saveSettings() {
   }
   uiSettings = next;
   const keys: (keyof Settings)[] = ["agentCommand", "workingDir", "provider", "model", "baseUrl", "configPath", "desktopControl"];
+  const prevCustom = findCustomProvider(loadedSettings.customProviders, loadedSettings.provider);
+  const nextCustom = findCustomProvider(next.customProviders, next.provider);
   const restart =
     keys.some((k) => next[k] !== loadedSettings![k]) ||
     next.agentArgs.join("\u0000") !== loadedSettings.agentArgs.join("\u0000") ||
-    (isCloud(kind) && next.apiKeys?.[kind] !== loadedSettings.apiKeys?.[kind]);
+    (isCloud(kind) && next.apiKeys?.[kind] !== loadedSettings.apiKeys?.[kind]) ||
+    JSON.stringify(prevCustom ?? null) !== JSON.stringify(nextCustom ?? null);
   applyLanguage(next.language ?? "");
   if (restart) addonsChanged = false; // restarted right below anyway
   closeSettings();
@@ -2516,7 +2751,38 @@ $("btn-copy-version").addEventListener("click", () => {
 $("btn-open-log").addEventListener("click", () => void openDiagnostic("log"));
 $("btn-test").addEventListener("click", () => void testConnection());
 $("btn-open-setup").addEventListener("click", () => void openSetup());
+$("btn-add-custom").addEventListener("click", () => {
+  flushCustomDraft();
+  const id = slugifyProviderId("custom", customProviders);
+  customProviders.push({ id, name: "", kind: "gemini", model: "", baseUrl: "", apiKey: "" });
+  void loadAarConfig(`${CUSTOM_PREFIX}${id}`).then(() => {
+    setHint("test-result", "");
+    $("settings-error").textContent = "";
+    field("set-custom-name").focus();
+  });
+});
+$("btn-delete-custom").addEventListener("click", () => {
+  if (!activeCustomId) return;
+  customProviders = customProviders.filter((p) => p.id !== activeCustomId);
+  activeCustomId = "";
+  field("set-model").value = "";
+  field("set-baseurl").value = "";
+  field("set-apikey").value = "";
+  setHint("test-result", "");
+  void loadAarConfig("");
+});
+customKindSelect.addEventListener("change", () => {
+  flushCustomDraft();
+  const cp = selectedCustom();
+  if (!cp) return;
+  field("set-baseurl").placeholder = urlPlaceholderFor(cp.kind);
+  $("cloud-note").textContent = t("cloudNote", { name: cp.name || kindName(cp.kind) });
+});
+for (const id of ["set-custom-name", "set-apikey", "set-baseurl", "set-model"]) {
+  field(id).addEventListener("input", () => flushCustomDraft());
+}
 providerSelect.addEventListener("change", () => {
+  flushCustomDraft();
   setHint("test-result", "");
   // Model and address belong to the previous choice.
   field("set-model").value = "";
@@ -2555,13 +2821,15 @@ updateComposer();
 autoGrow();
 // The saved language may differ from the cached one (first start, other PC):
 // settle it before the first texts (greeting, errors) are written.
-void invoke<Settings>("get_settings")
+void loadPlatform()
+  .then(() => invoke<Settings>("get_settings"))
   .then(async (s) => {
     uiSettings = s;
     grants.load(s.allowedTools);
     applyLanguage(s.language ?? "");
     // aar's rules name the UI language: Rust must know it before aar starts.
     await invoke("set_ui_language", { lang: lang() });
+    updateComposer();
   })
   .catch(() => undefined)
   .finally(() => void connect());
