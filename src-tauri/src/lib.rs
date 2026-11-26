@@ -711,13 +711,15 @@ async fn check_provider(
     kind: String,
     base_url: String,
     api_key: String,
+    model: Option<String>,
 ) -> Result<llm_config::EndpointCheck, String> {
     let key = if api_key.trim().is_empty() {
         state.settings.lock().unwrap().api_keys.get(&kind).cloned().unwrap_or_default()
     } else {
         api_key
     };
-    blocking(move || llm_config::check_provider(&kind, &base_url, &key)).await
+    let model = model.unwrap_or_default();
+    blocking(move || llm_config::check_provider(&kind, &base_url, &key, &model)).await
 }
 
 // ---- first-run setup (hardware, Ollama, model download) -------------------

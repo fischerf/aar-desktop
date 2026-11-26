@@ -93,8 +93,9 @@ a cloud provider such as Anthropic, OpenAI or Google Gemini instead.
    while showing the progress. After that, the eagle is ready – just click it and ask.
 
 **Requirements:** Windows 11 (64-bit). A graphics card with plenty of video memory makes Aar faster, but it
-also works on PCs without one – just more slowly. Instead of a local model you can use a cloud provider with
-your own API key (⚙ → *Language model connection*).
+also works on PCs without one – just more slowly. Instead of a local model you can configure a cloud or custom
+provider (such as Anthropic, OpenAI, Google Gemini or a custom API gateway) directly in the setup assistant or
+under ⚙ → *Language model connection*.
 
 Aar starts automatically when you sign in to Windows (you can turn this off in the settings). To uninstall
 it, use *Settings → Apps* in Windows like for any other program.

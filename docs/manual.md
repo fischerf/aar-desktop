@@ -42,19 +42,23 @@ Download `Aar_<version>_x64-setup.exe` from the [Releases page](../../../release
 
 ### The setup assistant
 
-On the first start the setup assistant opens by itself. It goes through four steps:
+On the first start the setup assistant opens by itself. You can choose between two tabs:
 
-1. **Check computer** – reads how much memory (RAM) your PC has and which graphics card it uses, including the
-   real amount of video memory.
-2. **Choose language model** – recommends a model that suits your computer (see
-   [Choosing a model](#choosing-a-local-model)). You can pick a different one from the list.
-3. **Model server (Ollama)** – if [Ollama](https://ollama.com/) is not installed yet, the assistant installs it
-   quietly for your user account (about 2 GB download) and starts it.
-4. **Download model** – downloads the chosen model and shows the progress.
+- **Local (Ollama)** – goes through four steps:
+  1. **Check computer** – reads how much memory (RAM) your PC has and which graphics card it uses, including the
+     real amount of video memory.
+  2. **Choose language model** – recommends a model that suits your computer (see
+     [Choosing a model](#choosing-a-local-model)). You can pick a different one from the list.
+  3. **Model server (Ollama)** – if [Ollama](https://ollama.com/) is not installed yet, the assistant installs it
+     quietly for your user account (about 2 GB download) and starts it.
+  4. **Download model** – downloads the chosen model and shows the progress.
+- **Cloud / Custom provider** – connect Aar directly to Anthropic Claude, OpenAI, Google Gemini (including custom
+  Gemini HTTP gateways) or an OpenAI-compatible service without installing Ollama. Enter an optional name, your API
+  key, an optional server address, and the model, test the connection with *Test* and apply it.
 
 You can close the assistant with *Later* and open it again at any time under ⚙ → *General* →
-*Setup assistant …*. If you would rather use a cloud provider, skip the assistant and enter your API key under
-⚙ → *Language model connection* instead (see [section 8](#8-language-models-and-providers)).
+*Setup assistant …*. You can also manage providers and add multiple named custom providers later under
+⚙ → *Language model connection* (see [section 8](#8-language-models-and-providers)).
 
 ### Starting with Windows
 
@@ -304,18 +308,23 @@ The small models and Ministral 3 are fine for looking things up, listing files a
 programs such as Paint, use Qwen 3.8. Ministral 3 needs a graphics card; on the processor alone it is far too slow. With a graphics card, a request takes from a few seconds to a few minutes. Without one, the small
 models take about 4 to 30 times longer.
 
-### Using a cloud provider
+### Using a cloud or custom provider
 
 Under ⚙ → *General* → *Language model connection* → *Profile / provider* you can choose:
 
+- a **custom provider** you saved in Aar Desktop (via *+ Custom provider* or the setup assistant's *Cloud / Custom
+  provider* tab – useful when you want several named endpoints, e.g. multiple custom Gemini or OpenAI-compatible
+  gateways),
 - a **profile** from your aar configuration (`~/.aar/config.json`), or
 - a **provider**: Ollama, Anthropic, OpenAI, Google Gemini or any OpenAI-compatible service.
 
-For cloud providers, enter your **API key**. *Test* checks the key and lists the available models; for Ollama it
-checks that the server is reachable and which models are installed. You can also override the server address
-and the model.
+For cloud and custom providers, enter your **API key** and **model** (and the **server address** when using a
+custom gateway). *Test* checks the key and lists available models when the server exposes a model list; for custom
+Gemini gateways (`base_url` set) and single-model OpenAI-compatible endpoints without a `/models` route, *Test*
+sends a minimal probe request directly to the endpoint. For Ollama it checks that the server is reachable and which
+models are installed.
 
-Your API key is stored in Aar's settings and passed to the agent only as an environment variable
+Your API keys are stored in Aar's settings and passed to the agent only as environment variables
 (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` or `GENERIC_API_KEY`). Aar Desktop never changes your
 aar configuration file.
 
@@ -333,7 +342,7 @@ Open the settings with ⚙ in the header of the chat bubble.
 | Abilities | *Operate programs on this PC*; *Start when signing in to Windows* |
 | Permissions | What Aar may do without asking (always / this conversation), each with *Revoke*; *Revoke all* |
 | Language | Display language: automatic (same as Windows), English, German or Simplified Chinese |
-| Language model connection | Profile / provider, API key, server address, model, *Test*, *Setup assistant …* |
+| Language model connection | Profile / provider, named custom providers (*+ Custom provider*), API key, server address, model, *Test*, *Setup assistant …* |
 | Advanced | aar configuration file, agent program, arguments, working folder, keyboard shortcut |
 | Troubleshooting | *Show conversation history*, *Show log*, copy version details, *Quit Aar* |
 

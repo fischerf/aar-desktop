@@ -470,10 +470,37 @@ async function run(colorScheme) {
   check(await page.locator("#setup[hidden]").count() === 1, "wizard closes after success");
   await page.evaluate(() => { delete window.__shim.sys; delete window.__shim.ollama; delete window.__shim.slow; });
 
-  // Back to the default profile.
+  // Setup wizard: Cloud / Custom provider (e.g. custom Gemini gateway).
   await page.click("#btn-settings");
   await page.waitForSelector("#settings:not([hidden])");
-  await page.selectOption("#set-provider", "");
+  await page.click("#btn-open-setup");
+  await page.waitForSelector("#setup:not([hidden])");
+  await page.click("#setup-tab-cloud");
+  check(await page.isVisible("#setup-cloud") && await page.isHidden("#setup-local"), "wizard switches to cloud/custom tab");
+  await page.selectOption("#setup-cloud-kind", "gemini");
+  await page.fill("#setup-cloud-name", "gemini 3.1");
+  await page.fill("#setup-cloud-apikey", "sk-test");
+  await page.fill("#setup-cloud-baseurl", "https://gateway.example/gemini/gemini-3.x-flash-lite");
+  await page.fill("#setup-cloud-model", "gemini-3.1-flash-lite");
+  await page.click("#btn-setup-cloud-test");
+  await page.waitForSelector("#setup-cloud-test-result.ok");
+  const startsBeforeCloudSetup = await page.evaluate(() => window.__shim.starts.length);
+  await page.click("#btn-setup-start");
+  await page.waitForFunction((n) => window.__shim.starts.length > n, startsBeforeCloudSetup);
+  const cloudSetupStart = await page.evaluate(() => window.__shim.starts.at(-1));
+  check(
+    cloudSetupStart.provider === "custom:gemini-3-1" &&
+      cloudSetupStart.customProviders?.some((p) => p.id === "gemini-3-1" && p.kind === "gemini" && p.model === "gemini-3.1-flash-lite"),
+    `wizard saved custom Gemini provider: ${JSON.stringify(cloudSetupStart.customProviders)}`,
+  );
+
+  // Settings -> General: custom provider is listed, editable, and removable.
+  await page.click("#btn-settings");
+  await page.waitForSelector("#settings:not([hidden])");
+  check((await page.inputValue("#set-provider")) === "custom:gemini-3-1", "settings select saved custom provider");
+  check(await page.isVisible("#custom-provider-row") && (await page.inputValue("#set-custom-name")) === "gemini 3.1",
+    "custom provider fields shown in settings");
+  await page.click("#btn-delete-custom");
   await page.click("#btn-settings-save");
   await page.waitForFunction(() => window.__shim.starts.at(-1).provider === "");
 

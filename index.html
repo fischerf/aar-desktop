@@ -64,6 +64,17 @@
             <label><span data-i18n="profile"></span>
               <select id="set-provider"></select>
             </label>
+            <div id="custom-provider-row" class="custom-provider-row" hidden>
+              <label><span data-i18n="customName"></span>
+                <input id="set-custom-name" spellcheck="false" data-i18n-placeholder="customNamePlaceholder" />
+              </label>
+              <label><span data-i18n="customType"></span>
+                <span class="row">
+                  <select id="set-custom-kind"></select>
+                  <button id="btn-delete-custom" class="secondary danger-btn" type="button" data-i18n="deleteCustom"></button>
+                </span>
+              </label>
+            </div>
             <p class="notice warn" id="cloud-note" hidden></p>
             <label id="apikey-row" hidden><span data-i18n="apiKey"></span> <small data-i18n="apiKeyHint"></small>
               <input id="set-apikey" type="password" spellcheck="false" autocomplete="off" />
@@ -80,7 +91,10 @@
               <datalist id="model-list"></datalist>
             </label>
             <p class="hint" id="config-hint"></p>
-            <p><button id="btn-open-setup" class="secondary" type="button" data-i18n="openSetup" data-i18n-tip="tipSetup" data-tip-pos="right"></button></p>
+            <p class="btn-row">
+              <button id="btn-add-custom" class="secondary" type="button" data-i18n="addCustomProvider"></button>
+              <button id="btn-open-setup" class="secondary" type="button" data-i18n="openSetup" data-i18n-tip="tipSetup" data-tip-pos="right"></button>
+            </p>
 
             <details class="advanced">
               <summary data-i18n="advanced"></summary>
@@ -182,17 +196,46 @@
 
         <section id="setup" hidden>
           <h2 data-i18n="setupTitle"></h2>
-          <p class="hint" data-i18n="setupIntro"></p>
-          <ol class="steps">
-            <li id="step-hw"><span class="st"></span><div class="body"><b data-i18n="stepHw"></b><div class="d"></div></div></li>
-            <li id="step-model"><span class="st"></span><div class="body"><b data-i18n="stepModel"></b><div class="d"></div>
-              <select id="setup-model" data-i18n-aria="stepModel"></select>
-              <p class="note" id="step-model-note"></p></div></li>
-            <li id="step-ollama"><span class="st"></span><div class="body"><b data-i18n="stepOllama"></b><div class="d"></div>
-              <progress max="1" hidden></progress></div></li>
-            <li id="step-pull"><span class="st"></span><div class="body"><b data-i18n="stepPull"></b><div class="d"></div>
-              <progress max="1" hidden></progress></div></li>
-          </ol>
+          <p class="hint" id="setup-intro" data-i18n="setupIntro"></p>
+          <nav class="tabs setup-tabs" role="tablist">
+            <button type="button" role="tab" id="setup-tab-local" data-setup-mode="local" class="active" aria-selected="true" data-i18n="setupTabLocal"></button>
+            <button type="button" role="tab" id="setup-tab-cloud" data-setup-mode="cloud" aria-selected="false" data-i18n="setupTabCloud"></button>
+          </nav>
+          <div id="setup-local">
+            <ol class="steps">
+              <li id="step-hw"><span class="st"></span><div class="body"><b data-i18n="stepHw"></b><div class="d"></div></div></li>
+              <li id="step-model"><span class="st"></span><div class="body"><b data-i18n="stepModel"></b><div class="d"></div>
+                <select id="setup-model" data-i18n-aria="stepModel"></select>
+                <p class="note" id="step-model-note"></p></div></li>
+              <li id="step-ollama"><span class="st"></span><div class="body"><b data-i18n="stepOllama"></b><div class="d"></div>
+                <progress max="1" hidden></progress></div></li>
+              <li id="step-pull"><span class="st"></span><div class="body"><b data-i18n="stepPull"></b><div class="d"></div>
+                <progress max="1" hidden></progress></div></li>
+            </ol>
+          </div>
+          <div id="setup-cloud" hidden>
+            <label><span data-i18n="customType"></span>
+              <select id="setup-cloud-kind"></select>
+            </label>
+            <label><span data-i18n="customName"></span> <small id="setup-cloud-name-hint"></small>
+              <input id="setup-cloud-name" spellcheck="false" data-i18n-placeholder="customNamePlaceholder" />
+            </label>
+            <label><span data-i18n="apiKey"></span> <small data-i18n="apiKeyHint"></small>
+              <input id="setup-cloud-apikey" type="password" spellcheck="false" autocomplete="off" />
+            </label>
+            <label><span data-i18n="serverAddress"></span>
+              <span class="row">
+                <input id="setup-cloud-baseurl" spellcheck="false" />
+                <button id="btn-setup-cloud-test" class="secondary" type="button" data-i18n="test" data-i18n-tip="tipTest"></button>
+              </span>
+            </label>
+            <p class="hint" id="setup-cloud-test-result"></p>
+            <label><span data-i18n="model"></span>
+              <input id="setup-cloud-model" spellcheck="false" list="setup-cloud-model-list" />
+              <datalist id="setup-cloud-model-list"></datalist>
+            </label>
+            <p class="notice warn" id="setup-cloud-note"></p>
+          </div>
           <p class="settings-error" id="setup-error"></p>
           <div class="settings-actions">
             <button id="btn-setup-cancel" class="secondary" data-i18n="later"></button>

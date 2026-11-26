@@ -57,10 +57,14 @@ the internet. `rules.rs` fills it in at every agent start and writes it to
 
 ### Language model providers
 
-The user can pick a profile from the aar configuration or a provider type (`ollama`, `anthropic`, `openai`,
-`gemini`, `generic`). The app passes `--provider`, `--base-url`, `--model` and `--config` to aar; API keys from
-`settings.apiKeys` go only into environment variables (`llm_config::api_key_env`). *Test* calls
-`check_provider`, which lists the provider's models. The aar configuration itself is never modified.
+The user can pick a saved custom provider (`settings.customProviders`, referenced as `custom:<id>` in
+`settings.provider`), a profile from the aar configuration, or a provider type (`ollama`, `anthropic`, `openai`,
+`gemini`, `generic`). Both the setup assistant (*Cloud / Custom provider* tab) and *Settings → General*
+(*+ Custom provider*) can create named custom providers. The app passes `--provider`, `--base-url`, `--model` and
+`--config` to aar; API keys from `settings.apiKeys` or `settings.customProviders` go only into environment
+variables (`llm_config::api_key_env`). *Test* calls `check_provider`, which lists the provider's models (or sends a
+minimal `:generateContent` / chat probe for custom Gemini HTTP gateways and single-model `generic` gateways that
+have no `/models` route). The aar configuration itself is never modified.
 
 ### Add-ons
 
