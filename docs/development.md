@@ -309,6 +309,23 @@ wsl -d Ubuntu-aarui -u root -- bash /mnt/b/Github_my/aar_ui/scripts/wsl/showcase
 - **Silent provider errors:** aar reports provider errors only on stderr and ends the turn with `end_turn` and no
   content; the widget detects this (`reportSilentTurn`). MCP servers that fail to start are reported as an agent
   message *before* the `session/new` response, so the widget buffers updates for unknown sessions.
+- **Gemini HTTP 400 about `$schema` in tool parameters:** MCP tools supply JSON Schema, whereas Gemini's
+  `parameters` field accepts only its restricted Schema format. Aar's HTTP adapter must send these schemas in
+  `parametersJsonSchema`, matching the SDK's `parameters_json_schema`; do not strip schema keywords globally or
+  switch a native Gemini endpoint to `generic`. Keep the profile's provider type `gemini` (for example,
+  `--provider gf35` selects a profile whose `name` is `gemini`). The connection test only lists models, so it does
+  not validate tool-bearing generation requests. After fixing Aar, rebuild with `build.sh --python` and install
+  the new installer: the installed `python/Lib/site-packages/agent/` is a wheel snapshot, not the Aar checkout.
+  Set `AAR_SRC` to the fixed source tree when it differs from the build script's default.
+- **Gemini HTTP 400 “Requests ending with a model turn are not supported” after a screenshot:** check Aar's
+  Gemini tool-image encoding before assuming the history actually ends in an assistant message. For Gemini 3+,
+  tool images belong inside their `functionResponse.parts`, not beside `functionResponse` as top-level
+  `inlineData` parts. The latter reproduces this error on the internal Gemini gateway even when the last role
+  is `user`. Fix the Aar adapter used by the selected agent program; rebuild the runtime with `--python` when
+  shipping the bundled agent. A custom system-installed Aar is independent of the bundled copy.
+- **Exit code 1 immediately after a restart:** the old agent is forcibly stopped on Windows, which can produce
+  code 1. Its asynchronous exit line may follow the replacement's start line; it does not necessarily mean the
+  replacement crashed. Check the provider error and subsequent output separately.
 - **Rust tests must not call `i18n::set_lang`** – the language is process-wide and tests run in parallel.
 - **The installer shows a license page** (`bundle.licenseFile` → `src-tauri/windows/license.txt`): the early
   preview warning and disclaimer in English, German and Chinese, followed by the full Apache License text. If
