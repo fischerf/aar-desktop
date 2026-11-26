@@ -135,6 +135,40 @@ the installer; `build.bat --fast` skips the runtime, and other options such as `
 `build.sh`. It refuses to run while Aar Desktop or an Aar installer from `dist\` is running, because Windows
 locks those files and they would not be overwritten.
 
+### Linux packages (preview)
+
+The Linux build runs natively in an **Ubuntu 22.04 (jammy) chroot** inside the same VM (`/srv/aarui-jammy`):
+glibc 2.35 and WebKitGTK 4.1 keep the packages runnable on Ubuntu/Kubuntu 22.04+, Debian 12+ and Fedora 36+. A
+build on the VM's own 24.04 would need glibc 2.39.
+
+```powershell
+# once: debootstrap jammy + WebKitGTK, Rust, Node in the chroot
+wsl -d Ubuntu-aarui -u root -- bash /mnt/b/Github_my/aar_ui/scripts/wsl/setup-linux.sh
+# build -> dist\linux\Aar_<ver>_amd64.AppImage, Aar-<ver>-1.x86_64.rpm, Aar_<ver>_x86_64.tar.gz
+wsl -d Ubuntu-aarui -u root -- bash /mnt/b/Github_my/aar_ui/scripts/wsl/build-linux.sh [--python] [--debug]
+# smoke test in the VM (headless): diagnose, runtime imports, GUI start under Xvfb, AppImage, rpm layout
+wsl -d Ubuntu-aarui -u root -- bash /mnt/b/Github_my/aar_ui/scripts/wsl/smoke-linux.sh
+```
+
+- **Runtime:** python-build-standalone CPython 3.13 (`scripts/wsl/bundle-python-linux.sh`), installed natively
+  with its own pip; `aar-tools/` is on `sys.path` through `aar-tools.pth`. Tauri puts it at
+  `<prefix>/lib/Aar/python` (rpm: `/usr/lib/Aar`, AppImage: `$APPDIR/usr/lib/Aar`, tar.gz: `lib/Aar` next to
+  `bin/`) – the same lookup `resource_dir()` does (`../lib/<productName>` next to the binary).
+- **tar.gz:** built by `build-linux.sh` from the binary, the runtime and `scripts/linux/` (`install.sh` adds a
+  menu entry and `~/.local/bin/aar-desktop`, `uninstall.sh` removes them). No .deb on purpose.
+- **What differs** (`src-tauri/src/platform.rs`, `src/platform.ts`, `<html data-os>` with `.win-only` /
+  `.linux-only`): no desktop control (no `windows_mcp`, no Paint suggestion), rules `rules/desktop-linux.md`
+  (bash, XDG user dirs from `user-dirs.dirs`), autostart `~/.config/autostart/aar-desktop.desktop`, Ollama is
+  unpacked from `ollama-linux-amd64.tar.zst` into `~/.local` (no root, no service; the widget starts
+  `ollama serve`), GPUs from `nvidia-smi` and `/sys/class/drm`, files open with `xdg-open` / the
+  `org.freedesktop.FileManager1` D-Bus interface, browsers for the add-ons from `PATH` (Chrome/Chromium as
+  `{chrome}`).
+- **Kubuntu tests:** `scripts/kubuntu/` runs the packages in KDE Plasma 6 (Wayland) and Plasma 5 (X11) inside
+  isolated WSL distros, headless – see its README (WSLg must be cut off before every run).
+- **Wayland:** the widget sets `GDK_BACKEND=x11` (XWayland: own position, always on top, X11 hotkey) and
+  `WEBKIT_DISABLE_DMABUF_RENDERER=1` for itself; `AAR_DESKTOP_WAYLAND=1` opts out. Programs it starts get the
+  original environment back, without the AppImage's library paths (`platform::command`).
+
 ---
 
 ## 4. Testing

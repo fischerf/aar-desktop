@@ -43,11 +43,11 @@
             <div id="session-options"></div>
 
             <h3 data-i18n="abilities"></h3>
-            <label class="check">
+            <label class="check win-only">
               <input type="checkbox" id="set-desktop" />
               <span data-i18n="desktopControl"></span>
             </label>
-            <p class="hint" data-i18n="desktopControlHint"></p>
+            <p class="hint win-only" data-i18n="desktopControlHint"></p>
             <label class="check">
               <input type="checkbox" id="set-autostart" />
               <span data-i18n="autostart"></span>
@@ -113,6 +113,7 @@
               <label><span data-i18n="hotkey"></span>
                 <input id="set-hotkey" spellcheck="false" />
               </label>
+              <p class="hint linux-only" data-i18n="hotkeyLinuxHint"></p>
             </details>
             <h3 data-i18n="troubleshooting"></h3>
             <p class="diag">

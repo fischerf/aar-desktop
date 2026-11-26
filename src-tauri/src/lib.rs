@@ -8,6 +8,7 @@ mod helpers;
 mod files;
 mod llm_config;
 mod photos;
+mod platform;
 mod rules;
 mod sessions;
 mod settings;
@@ -45,6 +46,9 @@ struct AppState {
     expanded_size: Mutex<(f64, f64)>,
     /// True while the app itself moves/resizes the window.
     adjusting: AtomicBool,
+    /// Linux: GTK applies size and position asynchronously; window events
+    /// before this moment are the app's own and must not move the anchor.
+    settle_until: Mutex<std::time::Instant>,
 }
 
 // ---------------------------------------------------------------------------
@@ -127,11 +131,44 @@ fn apply_size(win: &WebviewWindow, state: &AppState, logical: (f64, f64)) -> Res
         .map_err(|e| e.to_string());
     state.adjusting.store(false, Ordering::SeqCst);
     *state.anchor.lock().unwrap() = Some((x + w, y + h));
+    #[cfg(target_os = "linux")]
+    settle_linux(win, state, (x + w, y + h));
     result
 }
 
+/// Linux (GTK/X11): resize and move are asynchronous, a move right after a
+/// resize can get lost, and the window may not shrink below WebKitGTK's
+/// minimum size. Once GTK has settled, place the window again by its real
+/// size so its bottom-right corner (the mascot) sits at the anchor.
+#[cfg(target_os = "linux")]
+fn settle_linux(win: &WebviewWindow, state: &AppState, anchor: (i32, i32)) {
+    use std::time::{Duration, Instant};
+    *state.settle_until.lock().unwrap() = Instant::now() + Duration::from_millis(700);
+    let win = win.clone();
+    std::thread::spawn(move || {
+        for delay in [150u64, 350] {
+            std::thread::sleep(Duration::from_millis(delay));
+            let (Ok(pos), Ok(size)) = (win.outer_position(), win.outer_size()) else { return };
+            let (w, h) = (size.width as i32, size.height as i32);
+            let area = work_area_for(&win, anchor);
+            let (x, y, _, _) = match area {
+                Some(a) => place(anchor, (w, h), a),
+                None => (anchor.0 - w, anchor.1 - h, w, h),
+            };
+            if (pos.x, pos.y) != (x, y) {
+                let _ = win.set_position(PhysicalPosition::new(x, y));
+            }
+        }
+    });
+}
+
+/// Events caused by the app's own resizing (see `settle_linux`)?
+fn settling(state: &AppState) -> bool {
+    state.adjusting.load(Ordering::SeqCst) || std::time::Instant::now() < *state.settle_until.lock().unwrap()
+}
+
 fn remember_anchor(win: &WebviewWindow, state: &AppState) {
-    if state.adjusting.load(Ordering::SeqCst) {
+    if settling(state) {
         return;
     }
     if let (Ok(pos), Ok(size)) = (win.outer_position(), win.outer_size()) {
@@ -141,7 +178,7 @@ fn remember_anchor(win: &WebviewWindow, state: &AppState) {
 
 /// While expanded, remember the size the user resized the window to.
 fn remember_expanded_size(win: &WebviewWindow, state: &AppState, size: PhysicalSize<u32>) {
-    if !state.expanded.load(Ordering::SeqCst) || state.adjusting.load(Ordering::SeqCst) {
+    if !state.expanded.load(Ordering::SeqCst) || settling(state) {
         return;
     }
     if let Ok(scale) = win.scale_factor() {
@@ -390,7 +427,7 @@ async fn set_photo_settings(app: AppHandle, folders: Vec<String>, model: String)
     }
 }
 
-/// Windows folder picker (None = cancelled).
+/// Folder picker (None = cancelled).
 #[tauri::command]
 async fn pick_folder(app: AppHandle) -> Option<String> {
     use tauri_plugin_dialog::DialogExt;
@@ -446,7 +483,7 @@ fn delete_session(app: AppHandle, state: State<AppState>, id: String) -> Result<
     sessions::delete(&dir, &id)
 }
 
-/// Windows notification, unless the user is looking at the widget anyway.
+/// System notification, unless the user is looking at the widget anyway.
 /// `show` brings a hidden widget back (e.g. Aar waits for a permission).
 /// Returns whether a notification was sent.
 #[tauri::command]
@@ -525,7 +562,7 @@ fn apply_autostart(enabled: bool) {
         Ok(()) => String::new(),
         Err(e) => trf!(
             "Autostart konnte nicht eingerichtet werden: {e}",
-            "Could not set up starting with Windows: {e}",
+            "Could not set up the automatic start: {e}",
             "无法设置开机自动启动：{e}"
         ),
     };
@@ -538,6 +575,12 @@ static AUTOSTART_STATUS: Mutex<String> = Mutex::new(String::new());
 #[tauri::command]
 fn app_version(app: AppHandle) -> String {
     app.package_info().version.to_string()
+}
+
+/// "windows" | "linux" | … (texts and features differ, e.g. desktop control).
+#[tauri::command]
+fn app_platform() -> &'static str {
+    platform::os()
 }
 
 /// A file the agent created or changed during the last turn.
@@ -580,7 +623,7 @@ fn turn_files(app: AppHandle, state: State<AppState>, since_ms: u64, candidates:
         .collect()
 }
 
-/// Open a document with its default program, or show any file in Explorer.
+/// Open a document with its default program, or show any file in the file manager.
 /// Opening is limited to document/image types: never an exe, script or link,
 /// even if the webview asks for one.
 #[tauri::command]
@@ -601,16 +644,7 @@ fn open_file(path: String, reveal: bool) -> Result<(), String> {
         )
         .into());
     }
-    let mut cmd = std::process::Command::new("explorer");
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        let arg = if reveal { format!("/select,\"{}\"", p.display()) } else { format!("\"{}\"", p.display()) };
-        cmd.raw_arg(arg);
-    }
-    #[cfg(not(windows))]
-    cmd.arg(&p);
-    cmd.spawn().map(|_| ()).map_err(|e| trf!("Explorer konnte nicht starten: {e}", "Could not start Explorer: {e}", "无法启动资源管理器：{e}"))
+    platform::open(&p, reveal)
 }
 
 /// Places a user (or support) looks at when something went wrong.
@@ -632,7 +666,7 @@ fn diagnostic_paths(app: AppHandle, state: State<AppState>) -> DiagnosticPaths {
     }
 }
 
-/// Show the conversation folder or the log file in Explorer. Takes a fixed
+/// Show the conversation folder or the log file in the file manager. Takes a fixed
 /// name, never a path: the webview must not be able to open arbitrary files.
 #[tauri::command]
 fn open_path(app: AppHandle, state: State<AppState>, what: String) -> Result<(), String> {
@@ -661,23 +695,7 @@ fn open_path(app: AppHandle, state: State<AppState>, what: String) -> Result<(),
             ),
         });
     }
-    let mut cmd = std::process::Command::new("explorer");
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        // explorer wants the whole `/select,"<path>"` as one raw argument (spaces in paths).
-        if select {
-            cmd.raw_arg(format!("/select,\"{}\"", path.display()));
-        } else {
-            cmd.raw_arg(format!("\"{}\"", path.display()));
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = select;
-        cmd.arg(&path);
-    }
-    cmd.spawn().map(|_| ()).map_err(|e| trf!("Explorer konnte nicht starten: {e}", "Could not start Explorer: {e}", "无法启动资源管理器：{e}"))
+    platform::open(&path, select)
 }
 
 #[tauri::command]
@@ -803,20 +821,20 @@ fn quit_app(app: AppHandle) {
 /// `aar-desktop.exe --diagnose <file>`: write hardware/Ollama detection as JSON
 /// and exit (support + automated checks; the GUI build has no console).
 fn diagnose(path: &str) {
+    let res = agent_process::resource_dir_from_exe();
     let report = serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
+        "os": platform::os(),
         "system": setup::system_info(),
         "ollama": setup::ollama_status(),
-        // On Windows the resource dir is the install dir (next to the exe).
-        "bundledPython": std::env::current_exe()
-            .ok()
-            .and_then(|e| e.parent().and_then(agent_process::bundled_python))
+        "resourceDir": res.as_ref().map(|p| p.to_string_lossy().into_owned()),
+        "bundledPython": res
+            .as_deref()
+            .and_then(agent_process::bundled_python)
             .map(|p| p.to_string_lossy().into_owned()),
+        "bundledHelpers": res.as_deref().is_some_and(agent_process::bundled_helpers),
         "aarOnPath": agent_process::resolve_program("aar").map(|p| p.to_string_lossy().into_owned()),
-        "mcpServers": std::env::current_exe()
-            .ok()
-            .and_then(|e| e.parent().map(agent_process::bundled_mcp_servers))
-            .unwrap_or_default(),
+        "mcpServers": res.as_deref().map(agent_process::bundled_mcp_servers).unwrap_or_default(),
     });
     let _ = std::fs::write(path, serde_json::to_string_pretty(&report).unwrap_or_default());
 }
@@ -867,6 +885,8 @@ fn setup_cli(log: &str, model: Option<&str>) {
 }
 
 pub fn run() {
+    // Before any GUI code: XWayland + WebKitGTK settings on Linux.
+    platform::prepare_env();
     let args: Vec<String> = std::env::args().collect();
     if let Some(i) = args.iter().position(|a| a == "--diagnose") {
         diagnose(args.get(i + 1).map(String::as_str).unwrap_or("aar-desktop-diagnose.json"));
@@ -916,6 +936,7 @@ pub fn run() {
                 expanded: AtomicBool::new(false),
                 expanded_size: Mutex::new(expanded_size),
                 adjusting: AtomicBool::new(false),
+                settle_until: Mutex::new(std::time::Instant::now()),
             });
 
             if let Err(e) = register_hotkey(&handle, &hotkey) {
@@ -940,7 +961,9 @@ pub fn run() {
                 quit: quit.clone(),
             });
 
-            TrayIconBuilder::with_id("aar-tray")
+            // Without a tray (e.g. Linux desktops without StatusNotifier support or
+            // an unwritable runtime dir) the mascot still works: never fail the start.
+            let tray = TrayIconBuilder::with_id("aar-tray")
                 .icon(app.default_window_icon().cloned().ok_or("missing icon")?)
                 .tooltip(tray_tooltip())
                 .menu(&menu)
@@ -971,7 +994,10 @@ pub fn run() {
                         show_and_toggle(tray.app_handle());
                     }
                 })
-                .build(app)?;
+                .build(app);
+            if let Err(e) = tray {
+                eprintln!("tray icon not available: {e}");
+            }
 
             // Place the mascot, then show it.
             if let Some(win) = main_window(&handle) {
@@ -1018,6 +1044,7 @@ pub fn run() {
             diagnostic_paths,
             open_path,
             app_version,
+            app_platform,
             turn_files,
             open_file,
             aar_config_info,

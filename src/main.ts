@@ -22,6 +22,7 @@ import { photoResultCard, PhotosView } from "./photos";
 import { applyStatic, lang, LANG_NAMES, LANGS, locale, onLangChange, resolveLang, setLang, strings } from "./i18n";
 import { Grants, isRisky, permText, renderGrantList, toolLabel } from "./permissions";
 import { HistoryView } from "./history";
+import { isWindows, loadPlatform } from "./platform";
 
 interface CustomProvider {
   id: string;
@@ -78,10 +79,10 @@ const t = strings({
     abilities: "Fähigkeiten",
     desktopControl: "Programme auf diesem PC bedienen",
     desktopControlHint: "Aar kann Fenster lesen, Programme starten, klicken und tippen – und fragt vor jeder Änderung um Erlaubnis.",
-    autostart: "Beim Anmelden an Windows starten",
+    autostart: "Beim Anmelden automatisch starten",
     languageHead: "Sprache",
     languageLabel: "Sprache der Oberfläche",
-    languageAuto: "Automatisch (wie Windows)",
+    languageAuto: "Automatisch (Systemsprache)",
     connectionHead: "Sprachmodell-Verbindung",
     profile: "Profil / Anbieter",
     serverAddress: "Server-Adresse",
@@ -103,9 +104,9 @@ const t = strings({
     hotkey: "Tastenkürzel",
     troubleshooting: "Fehlersuche",
     showSessions: "Gesprächsverläufe anzeigen",
-    tipSessions: "Ordner mit den gespeicherten Gesprächen im Explorer öffnen",
+    tipSessions: "Ordner mit den gespeicherten Gesprächen öffnen",
     showLog: "Protokoll anzeigen",
-    tipLog: "Protokoll von Aar (Warnungen und Fehler) im Explorer zeigen",
+    tipLog: "Protokoll von Aar (Warnungen und Fehler) im Ordner zeigen",
     copy: "Kopieren",
     copied: "Kopiert ✓",
     tipCopyVersion: "Versionsangaben kopieren, z. B. für eine Fehlermeldung",
@@ -196,6 +197,8 @@ const t = strings({
     send: "Senden",
     working: "Aar arbeitet…",
     askMe: "Frag mich etwas… (Diktieren: Win+H)",
+    askMePlain: "Frag mich etwas…",
+    hotkeyLinuxHint: "Unter Wayland wirkt das Kürzel oft nur, wenn Aar vorne ist. Dann in den Systemeinstellungen ein Kürzel für den Befehl „aar-desktop“ anlegen – ein zweiter Start öffnet und schließt Aar.",
     notConnected: "Nicht verbunden",
     optModel: "Modell (nur dieses Gespräch)",
     optMode: "Arbeitsweise",
@@ -292,10 +295,10 @@ const t = strings({
     abilities: "Abilities",
     desktopControl: "Operate programs on this PC",
     desktopControlHint: "Aar can read windows, start programs, click and type – and asks for permission before every change.",
-    autostart: "Start when signing in to Windows",
+    autostart: "Start automatically when signing in",
     languageHead: "Language",
     languageLabel: "Display language",
-    languageAuto: "Automatic (same as Windows)",
+    languageAuto: "Automatic (system language)",
     connectionHead: "Language model connection",
     profile: "Profile / provider",
     serverAddress: "Server address",
@@ -317,9 +320,9 @@ const t = strings({
     hotkey: "Keyboard shortcut",
     troubleshooting: "Troubleshooting",
     showSessions: "Show conversation history",
-    tipSessions: "Open the folder with the saved conversations in Explorer",
+    tipSessions: "Open the folder with the saved conversations",
     showLog: "Show log",
-    tipLog: "Show Aar's log (warnings and errors) in Explorer",
+    tipLog: "Show Aar's log (warnings and errors) in its folder",
     copy: "Copy",
     copied: "Copied ✓",
     tipCopyVersion: "Copy the version details, e.g. for a bug report",
@@ -409,6 +412,8 @@ const t = strings({
     send: "Send",
     working: "Aar is working…",
     askMe: "Ask me something… (dictate: Win+H)",
+    askMePlain: "Ask me something…",
+    hotkeyLinuxHint: "On Wayland the shortcut often only works while Aar is in front. Then add a shortcut for the command “aar-desktop” in the system settings – starting it again opens and closes Aar.",
     notConnected: "Not connected",
     optModel: "Model (this conversation only)",
     optMode: "Way of working",
@@ -505,10 +510,10 @@ const t = strings({
     abilities: "能力",
     desktopControl: "操作这台电脑上的程序",
     desktopControlHint: "Aar 可以读取窗口、启动程序、点击和输入 – 每次更改前都会征求你的同意。",
-    autostart: "登录 Windows 时启动",
+    autostart: "登录时自动启动",
     languageHead: "语言",
     languageLabel: "界面语言",
-    languageAuto: "自动（与 Windows 相同）",
+    languageAuto: "自动（系统语言）",
     connectionHead: "语言模型连接",
     profile: "配置 / 提供方",
     serverAddress: "服务器地址",
@@ -530,9 +535,9 @@ const t = strings({
     hotkey: "快捷键",
     troubleshooting: "故障排查",
     showSessions: "显示对话记录",
-    tipSessions: "在资源管理器中打开保存对话的文件夹",
+    tipSessions: "打开保存对话的文件夹",
     showLog: "显示日志",
-    tipLog: "在资源管理器中显示 Aar 的日志（警告和错误）",
+    tipLog: "在文件夹中显示 Aar 的日志（警告和错误）",
     copy: "复制",
     copied: "已复制 ✓",
     tipCopyVersion: "复制版本信息，例如用于报告问题",
@@ -622,6 +627,8 @@ const t = strings({
     send: "发送",
     working: "Aar 正在工作…",
     askMe: "问我点什么…（语音输入：Win+H）",
+    askMePlain: "问我点什么…",
+    hotkeyLinuxHint: "在 Wayland 下，快捷键通常只在 Aar 位于前台时有效。此时请在系统设置中为命令“aar-desktop”添加快捷键 – 再次启动即可打开或关闭 Aar。",
     notConnected: "未连接",
     optModel: "模型（仅当前对话）",
     optMode: "工作方式",
@@ -1118,7 +1125,7 @@ function showSuggestions() {
     [t("sugLetter"), t("sugLetterPrompt")],
     [t("sugDownloads"), t("sugDownloadsPrompt")],
   ];
-  if (s?.desktopControl !== false) list.splice(1, 0, [t("sugPaint"), t("sugPaintPrompt")]);
+  if (isWindows() && s?.desktopControl !== false) list.splice(1, 0, [t("sugPaint"), t("sugPaintPrompt")]);
   if (s?.photoFolders?.length) list.push([t("sugPhotos"), t("sugPhotosPrompt")]);
   const row = document.createElement("div");
   row.className = "suggestions";
@@ -1798,7 +1805,7 @@ function updateComposer() {
   sendBtn.setAttribute("aria-label", busy ? t("tipCancel") : t("send"));
   sendBtn.disabled = !connected && !busy;
   input.disabled = !connected;
-  input.placeholder = connected ? (busy ? t("working") : t("askMe")) : t("notConnected");
+  input.placeholder = connected ? (busy ? t("working") : t(isWindows() ? "askMe" : "askMePlain")) : t("notConnected");
   refreshStatus(mascot.current);
 }
 
@@ -2814,13 +2821,15 @@ updateComposer();
 autoGrow();
 // The saved language may differ from the cached one (first start, other PC):
 // settle it before the first texts (greeting, errors) are written.
-void invoke<Settings>("get_settings")
+void loadPlatform()
+  .then(() => invoke<Settings>("get_settings"))
   .then(async (s) => {
     uiSettings = s;
     grants.load(s.allowedTools);
     applyLanguage(s.language ?? "");
     // aar's rules name the UI language: Rust must know it before aar starts.
     await invoke("set_ui_language", { lang: lang() });
+    updateComposer();
   })
   .catch(() => undefined)
   .finally(() => void connect());

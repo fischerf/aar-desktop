@@ -9,7 +9,7 @@ use serde::Serialize;
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStdin, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -46,6 +46,24 @@ struct ExitPayload {
 pub fn bundled_python(resource_dir: &Path) -> Option<PathBuf> {
     let exe = resource_dir.join("python").join(if cfg!(windows) { "python.exe" } else { "bin/python3" });
     exe.is_file().then_some(exe)
+}
+
+/// The resource folder for the CLI modes (no Tauri app there), resolved like
+/// Tauri does: Windows = the exe's folder; Linux = `../lib/Aar` next to the
+/// binary (rpm, tar.gz), the AppImage's `usr/lib/Aar`, else `/usr/lib/Aar`.
+pub fn resource_dir_from_exe() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?.to_path_buf();
+    if cfg!(windows) {
+        return Some(dir);
+    }
+    if let Ok(p) = dir.join("../lib/Aar").canonicalize() {
+        return Some(p);
+    }
+    if let Some(appdir) = std::env::var_os("APPDIR") {
+        return Some(PathBuf::from(appdir).join("usr/lib/Aar"));
+    }
+    Some(PathBuf::from("/usr/lib/Aar"))
 }
 
 /// An MCP server the widget hands to aar in ACP `session/new` (stdio transport).
@@ -233,6 +251,26 @@ pub fn bundled_mcp_servers(resource_dir: &Path) -> Vec<McpServer> {
     }]
 }
 
+/// `site-packages` of a `pip install --prefix <dir>` tree: `Lib\site-packages`
+/// on Windows, `lib/python3.X/site-packages` elsewhere (all versions found, so
+/// it does not matter which Python installed them).
+pub fn prefix_site_dirs(prefix: &Path) -> Vec<PathBuf> {
+    if cfg!(windows) {
+        return vec![prefix.join("Lib").join("site-packages")];
+    }
+    let mut dirs: Vec<PathBuf> = std::fs::read_dir(prefix.join("lib"))
+        .map(|rd| {
+            rd.flatten()
+                .filter(|e| e.file_name().to_string_lossy().starts_with("python"))
+                .map(|e| e.path().join("site-packages"))
+                .filter(|p| p.is_dir())
+                .collect()
+        })
+        .unwrap_or_default();
+    dirs.sort();
+    dirs
+}
+
 /// Decide how to launch aar. Empty/`auto` command = bundled runtime if present,
 /// else `aar` from PATH. Returns the program and arguments that precede the
 /// user's `agent_args` (e.g. `-m agent.transports.cli` for the bundled Python).
@@ -315,7 +353,7 @@ impl AgentProcess {
         let cwd = settings.resolved_working_dir(app);
 
         let (program, prefix) = resolve_agent(app, &settings.agent_command)?;
-        let mut cmd = Command::new(&program);
+        let mut cmd = crate::platform::command(&program);
         cmd.args(&prefix)
             .args(settings.effective_args())
             // Bundled runtime: never pick up packages from the user's own Python.
@@ -348,9 +386,8 @@ impl AgentProcess {
         if let Some(dir) = crate::addons::ext_dir(app) {
             // Bundled runtime: aar_desktop.boot adds it. Own Python: via PYTHONPATH.
             if prefix.first().map(String::as_str) != Some("-m") {
-                let site = dir.join("Lib").join("site-packages");
                 let rest = std::env::var_os("PYTHONPATH");
-                let mut parts = vec![site];
+                let mut parts = prefix_site_dirs(&dir);
                 if let Some(r) = rest {
                     parts.extend(std::env::split_paths(&r));
                 }

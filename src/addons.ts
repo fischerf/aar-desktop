@@ -6,6 +6,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { lang, strings, type Lang } from "./i18n";
+import { isWindows } from "./platform";
 
 // ---------------------------------------------------------------------------
 // Types (backend)
@@ -548,6 +549,22 @@ const NODE_DOWNLOAD = {
   zh: "需要 Node.js – Aar 会在首次安装时自动下载（约 35 MB）。",
 };
 
+/** Linux finds Google Chrome or Chromium as `{chrome}`. */
+const CHROME_LABEL = chromeLabel();
+function chromeLabel(): L3 {
+  return {
+    get de() {
+      return isWindows() ? "Google Chrome (muss installiert sein)" : "Google Chrome / Chromium (muss installiert sein)";
+    },
+    get en() {
+      return isWindows() ? "Google Chrome (must be installed)" : "Google Chrome / Chromium (must be installed)";
+    },
+    get zh() {
+      return isWindows() ? "Google Chrome（需已安装）" : "Google Chrome / Chromium（需已安装）";
+    },
+  };
+}
+
 const F_HEADLESS: Field = {
   key: "headless",
   type: "bool",
@@ -627,10 +644,18 @@ const MCP_CATALOG: CatalogEntry[] = [
     id: "playwright",
     runtime: "node",
     title: { de: "Webseiten bedienen (Playwright)", en: "Operate websites (Playwright)", zh: "操作网页（Playwright）" },
-    desc: {
-      de: "Aar steuert einen Browser: Seiten öffnen, lesen, klicken, Formulare ausfüllen. Läuft mit Edge, das auf jedem Windows vorhanden ist.",
-      en: "Aar controls a browser: open and read pages, click, fill in forms. Works with Edge, which every Windows has.",
-      zh: "Aar 控制浏览器：打开和阅读网页、点击、填写表单。可使用每台 Windows 都自带的 Edge。",
+    get desc() {
+      return isWindows()
+        ? {
+            de: "Aar steuert einen Browser: Seiten öffnen, lesen, klicken, Formulare ausfüllen. Läuft mit Edge, das auf jedem Windows vorhanden ist.",
+            en: "Aar controls a browser: open and read pages, click, fill in forms. Works with Edge, which every Windows has.",
+            zh: "Aar 控制浏览器：打开和阅读网页、点击、填写表单。可使用每台 Windows 都自带的 Edge。",
+          }
+        : {
+            de: "Aar steuert einen Browser: Seiten öffnen, lesen, klicken, Formulare ausfüllen. Braucht Google Chrome oder Chromium.",
+            en: "Aar controls a browser: open and read pages, click, fill in forms. Needs Google Chrome or Chromium.",
+            zh: "Aar 控制浏览器：打开和阅读网页、点击、填写表单。需要 Google Chrome 或 Chromium。",
+          };
     },
     package: "@playwright/mcp@latest",
     script: "playwright-mcp",
@@ -638,18 +663,26 @@ const MCP_CATALOG: CatalogEntry[] = [
       {
         key: "browser",
         type: "select",
-        default: "msedge",
+        // Linux: Chrome or Chromium (`{chrome}`), Edge only if installed.
+        default: (b) => (isWindows() || (b.edge && !b.chrome) ? "msedge" : "chrome"),
         label: { de: "Browser", en: "Browser", zh: "浏览器" },
         options: [
           { value: "msedge", label: { de: "Microsoft Edge", en: "Microsoft Edge", zh: "Microsoft Edge" } },
-          { value: "chrome", label: { de: "Google Chrome (muss installiert sein)", en: "Google Chrome (must be installed)", zh: "Google Chrome（需已安装）" } },
+          { value: "chrome", label: CHROME_LABEL },
         ],
       },
       F_HEADLESS,
       F_ISOLATED,
     ],
     build: (o) => ({
-      args: ["--browser", o.browser || "msedge", ...(o.headless === "1" ? ["--headless"] : []), ...(o.isolated === "1" ? ["--isolated"] : [])],
+      args: [
+        "--browser",
+        o.browser || "msedge",
+        // Linux: the Chrome/Chromium found on PATH (Playwright only knows /opt/google/chrome).
+        ...(!isWindows() && o.browser === "chrome" ? ["--executable-path", "{chrome}"] : []),
+        ...(o.headless === "1" ? ["--headless"] : []),
+        ...(o.isolated === "1" ? ["--isolated"] : []),
+      ],
       env: [],
     }),
     warnings: [BROWSER_WARNING, NODE_DOWNLOAD],
@@ -677,7 +710,12 @@ const MCP_CATALOG: CatalogEntry[] = [
           zh: "官方仅支持 Chrome，Edge 通常也可以使用。",
         },
         options: [
-          { value: "chrome", label: { de: "Google Chrome", en: "Google Chrome", zh: "Google Chrome" } },
+          {
+            value: "chrome",
+            get label() {
+              return isWindows() ? { de: "Google Chrome", en: "Google Chrome", zh: "Google Chrome" } : CHROME_LABEL;
+            },
+          },
           { value: "edge", label: { de: "Microsoft Edge (inoffiziell)", en: "Microsoft Edge (unofficial)", zh: "Microsoft Edge（非官方）" } },
         ],
       },
@@ -707,7 +745,13 @@ const MCP_CATALOG: CatalogEntry[] = [
       },
     ],
     build: (o) => {
-      const args = o.browser === "edge" ? ["--executablePath", "{edge}"] : ["--channel", "stable"];
+      // Linux: Chrome or Chromium from PATH; Windows: the installed stable Chrome.
+      const args =
+        o.browser === "edge"
+          ? ["--executablePath", "{edge}"]
+          : isWindows()
+            ? ["--channel", "stable"]
+            : ["--executablePath", "{chrome}"];
       if (o.tools === "slim") args.push("--slim");
       else if (o.tools !== "all")
         args.push("--no-category-emulation", "--no-category-performance", "--no-category-network", "--no-category-memory");

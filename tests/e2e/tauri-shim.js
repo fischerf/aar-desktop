@@ -454,6 +454,8 @@
           return "C:\\Users\\Demo";
         case "app_version":
           return "0.1.0";
+        case "app_platform":
+          return window.__shimPlatform ?? "windows";
         case "turn_files": {
           if (window.__shimTurnFiles) return window.__shimTurnFiles;
           // Like Rust: only files that exist and changed during the turn.

@@ -1,4 +1,5 @@
 [![Windows 11](https://img.shields.io/badge/Windows%2011-0078D4?logo=windows11&logoColor=fff)](#)
+[![Linux](https://img.shields.io/badge/Linux-preview-FCC624?logo=linux&logoColor=000)](#linux-preview)
 [![Tauri](https://img.shields.io/badge/Tauri%202-24C8DB?logo=tauri&logoColor=fff)](https://tauri.app/)
 [![Rust](https://img.shields.io/badge/Rust-000000?logo=rust&logoColor=fff)](#)
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=fff)](#)
@@ -9,7 +10,7 @@
 
 # 🦅 Aar Desktop
 
-**A friendly desktop assistant for Windows 11 – powered by the aar agent**
+**A friendly desktop assistant for Windows 11 (and Linux, preview) – powered by the aar agent**
 
 [![Website](https://img.shields.io/badge/website-fischerf.github.io%2Faar--desktop-blue?style=flat-square)](https://fischerf.github.io/aar-desktop/)
 [![Made in the EU](https://img.shields.io/badge/made%20in%20the-EU-003399?style=flat-square)](#privacy-by-design)
@@ -99,6 +100,26 @@ under ⚙ → *Language model connection*.
 
 Aar starts automatically when you sign in to Windows (you can turn this off in the settings). To uninstall
 it, use *Settings → Apps* in Windows like for any other program.
+
+### Linux (preview)
+
+Linux packages are on the [Releases page](../../releases) as well – they bring the aar agent and its own Python
+along, like the Windows installer:
+
+- **AppImage** `Aar_<version>_amd64.AppImage` – one file for most distributions: make it executable
+  (`chmod +x`) and start it.
+- **rpm** `Aar-<version>-1.x86_64.rpm` – Fedora, openSUSE and others.
+- **tar.gz** `Aar_<version>_x86_64.tar.gz` – unpack it anywhere and run `./install.sh` (menu entry, command
+  `aar-desktop`). Needs WebKitGTK 4.1 (`sudo apt install libwebkit2gtk-4.1-0 libayatana-appindicator3-1` on
+  Ubuntu/Kubuntu).
+
+Requirements: x86-64 with glibc 2.35 or newer (e.g. Ubuntu/Kubuntu 22.04+, Debian 12+, Fedora 36+). The setup
+assistant installs Ollama without root rights into `~/.local` and starts it when Aar starts.
+
+Not on Linux yet: **operating other programs** (reading windows, clicking, typing – the Paint example). Aar works
+with files, commands (bash) and, with the web add-ons, web pages. The widget runs through XWayland so it can stay
+in the bottom-right corner; on Wayland a global shortcut may only work while Aar is in front – add a shortcut for
+the command `aar-desktop` in the system settings instead (starting it again opens and closes Aar).
 
 ## Features
 

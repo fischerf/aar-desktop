@@ -734,6 +734,32 @@ await run("light");
   await browser.close();
 }
 
+// Linux: no desktop control (no Paint suggestion, no checkbox), no Win+H, hotkey hint.
+{
+  const browser = await chromium.launch();
+  const page = await browser.newPage({ viewport: { width: 400, height: 640 } });
+  await page.addInitScript(() => { window.__shimPlatform = "linux"; });
+  await page.addInitScript(shim);
+  await page.goto(BASE);
+  await page.waitForFunction(() => document.querySelector("#mascot")?.classList.contains("mood-idle"));
+  check(await page.evaluate(() => document.documentElement.dataset.os) === "linux", "linux: <html data-os> set");
+  await page.mouse.move(330, 580);
+  await page.mouse.down();
+  await page.mouse.up();
+  await page.waitForSelector("#suggestions button");
+  const sugs = await page.locator("#suggestions button").allInnerTexts();
+  check(sugs.length === 3 && !sugs.some((s) => s.includes("Paint")), `linux: no Paint suggestion: ${sugs.join(" | ")}`);
+  const ph = await page.getAttribute("#input", "placeholder");
+  check(!ph.includes("Win+H") && ph.length > 0, `linux: placeholder without Win+H: ${ph}`);
+  await page.click("#btn-settings");
+  await page.waitForSelector("#settings:not([hidden])");
+  check(await page.isHidden("#set-desktop") && await page.isVisible("#set-autostart"), "linux: desktop control hidden, autostart shown");
+  await page.locator("[data-i18n=hotkeyLinuxHint]").evaluate((el) => { el.closest("details").open = true; });
+  check(await page.isVisible("[data-i18n=hotkeyLinuxHint]"), "linux: hotkey hint shown");
+  await page.screenshot({ path: `${OUT}/linux-settings.png` });
+  await browser.close();
+}
+
 // Mascot moods sheet.
 {
   const browser = await chromium.launch();

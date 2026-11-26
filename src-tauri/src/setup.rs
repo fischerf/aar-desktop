@@ -14,7 +14,16 @@ use crate::i18n::tr;
 pub type Reporter<'a> = &'a dyn Fn(Progress);
 
 pub const OLLAMA_URL: &str = "http://127.0.0.1:11434";
+#[cfg(windows)]
 const OLLAMA_SETUP_URL: &str = "https://ollama.com/download/OllamaSetup.exe";
+/// Ollama for Linux (what ollama.com/install.sh unpacks to /usr/local; here
+/// without root into ~/.local: `bin/ollama` + `lib/ollama`).
+#[cfg(not(windows))]
+const OLLAMA_LINUX_URL: &str = if cfg!(target_arch = "aarch64") {
+    "https://ollama.com/download/ollama-linux-arm64.tar.zst"
+} else {
+    "https://ollama.com/download/ollama-linux-amd64.tar.zst"
+};
 
 static CANCEL: AtomicBool = AtomicBool::new(false);
 
@@ -123,10 +132,68 @@ fn gpus() -> Vec<Gpu> {
     out
 }
 
+/// Linux: NVIDIA cards from `nvidia-smi` (name + memory), the others from
+/// `/sys/class/drm` (amdgpu reports its VRAM there).
 #[cfg(not(windows))]
 fn gpus() -> Vec<Gpu> {
-    let _ = vendor_name;
-    Vec::new()
+    let mut out = crate::platform::command("nvidia-smi")
+        .args(["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| parse_nvidia_smi(&String::from_utf8_lossy(&o.stdout)))
+        .unwrap_or_default();
+    let have_nvidia = !out.is_empty();
+    for g in drm_gpus(std::path::Path::new("/sys/class/drm")) {
+        if !(have_nvidia && g.vendor == "nvidia") {
+            out.push(g);
+        }
+    }
+    out
+}
+
+/// `nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits` lines.
+#[cfg_attr(windows, allow(dead_code))]
+fn parse_nvidia_smi(text: &str) -> Vec<Gpu> {
+    text.lines()
+        .filter_map(|l| {
+            let (name, mem) = l.rsplit_once(',')?;
+            Some(Gpu { name: name.trim().into(), vendor: "nvidia".into(), vram_mb: mem.trim().parse().ok()? })
+        })
+        .collect()
+}
+
+/// Graphics cards under `/sys/class/drm/card<N>/device` (not the connectors
+/// like `card0-HDMI-A-1`).
+#[cfg_attr(windows, allow(dead_code))]
+fn drm_gpus(root: &std::path::Path) -> Vec<Gpu> {
+    let mut cards: Vec<(String, PathBuf)> = std::fs::read_dir(root)
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| (e.file_name().to_string_lossy().into_owned(), e.path()))
+                .filter(|(n, _)| n.strip_prefix("card").is_some_and(|r| !r.is_empty() && r.bytes().all(|b| b.is_ascii_digit())))
+                .collect()
+        })
+        .unwrap_or_default();
+    cards.sort();
+    let mut out = vec![];
+    for (_, card) in cards {
+        let dev = card.join("device");
+        let read = |f: &str| std::fs::read_to_string(dev.join(f)).ok().map(|s| s.trim().to_string());
+        let Some(vendor) = read("vendor").and_then(|v| u32::from_str_radix(v.trim_start_matches("0x"), 16).ok()) else {
+            continue;
+        };
+        let vendor = vendor_name(vendor);
+        let vram_mb = read("mem_info_vram_total").and_then(|v| v.parse::<u64>().ok()).unwrap_or(0) / 1024 / 1024;
+        let name = match vendor {
+            "nvidia" => "NVIDIA",
+            "amd" => "AMD Radeon",
+            "intel" => "Intel Graphics",
+            _ => "GPU",
+        };
+        out.push(Gpu { name: name.into(), vendor: vendor.into(), vram_mb });
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -164,15 +231,22 @@ fn agent() -> ureq::Agent {
         .build()
 }
 
+/// Where Ollama is installed for the current user (Windows: the official
+/// installer's folder; Linux: the prefix `~/.local`).
 fn ollama_dir() -> Option<PathBuf> {
-    std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("Programs").join("Ollama"))
+    if cfg!(windows) {
+        std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("Programs").join("Ollama"))
+    } else {
+        std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local"))
+    }
 }
 
 fn ollama_exe() -> Option<PathBuf> {
     ollama_dir()
-        .map(|d| d.join(if cfg!(windows) { "ollama.exe" } else { "ollama" }))
+        .map(|d| if cfg!(windows) { d.join("ollama.exe") } else { d.join("bin").join("ollama") })
         .filter(|p| p.is_file())
         .or_else(|| crate::agent_process::resolve_program("ollama").ok())
+        .or_else(|| Some(PathBuf::from("/usr/local/bin/ollama")).filter(|p| !cfg!(windows) && p.is_file()))
 }
 
 fn ollama_version(timeout: Duration) -> Option<String> {
@@ -208,22 +282,6 @@ pub fn ollama_status() -> OllamaStatus {
     }
 }
 
-fn spawn_hidden(program: &PathBuf, args: &[&str]) -> std::io::Result<()> {
-    let mut cmd = std::process::Command::new(program);
-    cmd.args(args)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        const DETACHED_PROCESS: u32 = 0x0000_0008;
-        cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
-    }
-    cmd.spawn().map(|_| ())
-}
-
 /// Make sure the Ollama server answers; start it if needed.
 pub fn ollama_start(report: Reporter) -> Result<OllamaStatus, String> {
     CANCEL.store(false, Ordering::SeqCst);
@@ -231,12 +289,15 @@ pub fn ollama_start(report: Reporter) -> Result<OllamaStatus, String> {
         return Ok(ollama_status());
     }
     emit(report, "start", tr("Starte Ollama …", "Starting Ollama …", "正在启动 Ollama …"), 0, 0);
-    // Prefer the tray app (keeps running, autostarts with Windows); else the bare server.
-    // `--hide`: only the tray icon, without opening Ollama's chat window.
-    let tray = ollama_dir().map(|d| d.join("ollama app.exe")).filter(|p| p.is_file());
+    // Windows: prefer the tray app (keeps running, autostarts with Windows); else the
+    // bare server. `--hide`: only the tray icon, without opening Ollama's chat window.
+    // Linux: `ollama serve` in its own session (keeps running when the widget quits).
+    let tray = ollama_dir().map(|d| d.join("ollama app.exe")).filter(|p| cfg!(windows) && p.is_file());
+    let log = std::env::temp_dir().join("aar-ollama-serve.log");
+    let log = (!cfg!(windows)).then_some(log.as_path());
     match (tray, ollama_exe()) {
-        (Some(t), _) => spawn_hidden(&t, &["--hide"]),
-        (None, Some(exe)) => spawn_hidden(&exe, &["serve"]),
+        (Some(t), _) => crate::platform::spawn_detached(&t, &["--hide"], None),
+        (None, Some(exe)) => crate::platform::spawn_detached(&exe, &["serve"], log),
         (None, None) => {
             return Err(tr("Ollama ist nicht installiert", "Ollama is not installed", "尚未安装 Ollama").into())
         }
@@ -269,18 +330,20 @@ fn downloading_ollama() -> &'static str {
     tr("Lade Ollama herunter …", "Downloading Ollama …", "正在下载 Ollama …")
 }
 
-/// Download the official installer and install Ollama silently for the current user.
-pub fn ollama_install(report: Reporter) -> Result<OllamaStatus, String> {
-    CANCEL.store(false, Ordering::SeqCst);
-    let target = std::env::temp_dir().join("OllamaSetup.exe");
+fn installing_ollama() -> &'static str {
+    tr("Installiere Ollama …", "Installing Ollama …", "正在安装 Ollama …")
+}
+
+/// Download `url` to `target` with progress (phase "download").
+fn download(report: Reporter, url: &str, target: &std::path::Path) -> Result<(), String> {
     emit(report, "download", downloading_ollama(), 0, 0);
     let resp = agent()
-        .get(OLLAMA_SETUP_URL)
+        .get(url)
         .call()
         .map_err(|e| trf!("Download fehlgeschlagen: {e}", "Download failed: {e}", "下载失败：{e}"))?;
     let total: u64 = resp.header("Content-Length").and_then(|v| v.parse().ok()).unwrap_or(0);
     let mut reader = resp.into_reader();
-    let mut file = std::fs::File::create(&target).map_err(|e| e.to_string())?;
+    let mut file = std::fs::File::create(target).map_err(|e| e.to_string())?;
     let mut buf = vec![0u8; 256 * 1024];
     let mut done = 0u64;
     let mut last = Instant::now();
@@ -303,8 +366,16 @@ pub fn ollama_install(report: Reporter) -> Result<OllamaStatus, String> {
     if total > 0 && done < total {
         return Err(tr("Download unvollständig", "Download incomplete", "下载不完整").into());
     }
+    Ok(())
+}
 
-    emit(report, "install", tr("Installiere Ollama …", "Installing Ollama …", "正在安装 Ollama …"), 0, 0);
+/// Download the official installer and install Ollama silently for the current user.
+#[cfg(windows)]
+pub fn ollama_install(report: Reporter) -> Result<OllamaStatus, String> {
+    CANCEL.store(false, Ordering::SeqCst);
+    let target = std::env::temp_dir().join("OllamaSetup.exe");
+    download(report, OLLAMA_SETUP_URL, &target)?;
+    emit(report, "install", installing_ollama(), 0, 0);
     // Ollama's installer is Inno Setup: per-user install, no admin rights needed.
     let status = std::process::Command::new(&target)
         .args(["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-"])
@@ -326,6 +397,46 @@ pub fn ollama_install(report: Reporter) -> Result<OllamaStatus, String> {
         ));
     }
     ollama_start(report)
+}
+
+/// Download Ollama's Linux archive and unpack it into `~/.local` (no root,
+/// no system service: the widget starts `ollama serve` itself).
+#[cfg(not(windows))]
+pub fn ollama_install(report: Reporter) -> Result<OllamaStatus, String> {
+    CANCEL.store(false, Ordering::SeqCst);
+    let prefix = ollama_dir().ok_or("no home folder")?;
+    let target = std::env::temp_dir().join(format!("aar-ollama-{}.tar.zst", std::process::id()));
+    let result = download(report, OLLAMA_LINUX_URL, &target).and_then(|()| {
+        emit(report, "install", installing_ollama(), 0, 0);
+        unpack_tar_zst(&target, &prefix)
+    });
+    let _ = std::fs::remove_file(&target);
+    result.map_err(|e| trf!("Installation fehlgeschlagen: {e}", "Installation failed: {e}", "安装失败：{e}"))?;
+    if !prefix.join("bin").join("ollama").is_file() {
+        return Err(tr(
+            "Installation fehlgeschlagen: ollama fehlt im Archiv",
+            "Installation failed: ollama is missing in the archive",
+            "安装失败：压缩包中没有 ollama",
+        )
+        .into());
+    }
+    ollama_start(report)
+}
+
+/// Unpack a `.tar.zst` archive below `dest` (entries must stay inside it).
+#[cfg(not(windows))]
+fn unpack_tar_zst(archive: &std::path::Path, dest: &std::path::Path) -> Result<(), String> {
+    let file = std::fs::File::open(archive).map_err(|e| e.to_string())?;
+    let decoder = ruzstd::decoding::StreamingDecoder::new(std::io::BufReader::new(file)).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(dest).map_err(|e| e.to_string())?;
+    let mut tar = tar::Archive::new(decoder);
+    for entry in tar.entries().map_err(|e| e.to_string())? {
+        check_cancel()?;
+        let mut entry = entry.map_err(|e| e.to_string())?;
+        // unpack_in refuses paths that would leave `dest`.
+        entry.unpack_in(dest).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 /// Download a model (`ollama pull`) with progress.
@@ -405,6 +516,34 @@ mod tests {
         any(pull_message("pulling 8eeb52dfb3bb"), "Lade Modell herunter …", "Downloading model …", "正在下载模型 …");
         any(pull_message("verifying sha256 digest"), "Prüfe Download …", "Checking download …", "正在校验下载 …");
         assert_eq!(pull_message("something else"), "something else");
+    }
+
+    #[test]
+    fn parses_nvidia_smi() {
+        let g = parse_nvidia_smi("NVIDIA GeForce RTX 4090, 24564\nbroken\nNVIDIA A2, 15356\n");
+        assert_eq!(g.len(), 2);
+        assert_eq!((g[0].name.as_str(), g[0].vram_mb, g[0].vendor.as_str()), ("NVIDIA GeForce RTX 4090", 24564, "nvidia"));
+    }
+
+    #[test]
+    fn reads_drm_cards() {
+        let root = std::env::temp_dir().join(format!("aar-ui-drm-{}", std::process::id()));
+        let card = |name: &str, vendor: &str, vram: Option<&str>| {
+            let dev = root.join(name).join("device");
+            std::fs::create_dir_all(&dev).unwrap();
+            std::fs::write(dev.join("vendor"), format!("{vendor}\n")).unwrap();
+            if let Some(v) = vram {
+                std::fs::write(dev.join("mem_info_vram_total"), v).unwrap();
+            }
+        };
+        card("card0", "0x8086", None);
+        card("card1", "0x1002", Some("17163091968\n"));
+        card("card1-DP-1", "0x1002", None);
+        let g = drm_gpus(&root);
+        assert_eq!(g.len(), 2, "{g:?}");
+        assert_eq!((g[0].vendor.as_str(), g[0].vram_mb), ("intel", 0));
+        assert_eq!((g[1].vendor.as_str(), g[1].vram_mb), ("amd", 16368));
+        std::fs::remove_dir_all(root).ok();
     }
 
     #[test]

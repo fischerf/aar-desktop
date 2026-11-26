@@ -476,6 +476,8 @@ def spawn_index(cfg: Config) -> bool:
         stderr=subprocess.DEVNULL,
         creationflags=flags,
         close_fds=True,
+        # POSIX: own session, so stopping aar (or the widget) does not end it.
+        start_new_session=os.name != "nt",
     )
     return True
 
