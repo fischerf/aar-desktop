@@ -10,6 +10,8 @@
 set -euo pipefail
 SRC="${AAR_UI_SRC:-/mnt/b/Github_my/aar_ui}"
 DIST="$SRC/dist/linux"
+# Test this version's packages (dist/linux may hold older ones).
+VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$SRC/src-tauri/tauri.conf.json")"
 SHOTS="$SRC/dist/screenshots"
 export DEBIAN_FRONTEND=noninteractive
 need=()
@@ -23,9 +25,9 @@ trap 'rm -rf "$T"' EXIT
 fail=0
 check() { if eval "$1"; then echo "PASS  $2"; else echo "FAIL  $2"; fail=1; fi; }
 
-echo "==> tar.gz"
-tar -xzf "$(ls "$DIST"/Aar_*_x86_64.tar.gz | head -1)" -C "$T"
-APP="$(ls -d "$T"/Aar_*_x86_64)"
+echo "==> tar.gz ($VERSION)"
+tar -xzf "$DIST/Aar_${VERSION}_x86_64.tar.gz" -C "$T"
+APP="$T/Aar_${VERSION}_x86_64"
 export HOME="$T/home" XDG_CONFIG_HOME="$T/home/.config" XDG_DATA_HOME="$T/home/.local/share"
 mkdir -p "$HOME"
 "$APP/bin/aar-desktop" --diagnose "$T/diag.json"
@@ -63,7 +65,7 @@ grep -v '^$' "$T/gui.out" | head -20 || true
 mkdir -p "$SHOTS" && cp "$T/screen.png" "$SHOTS/linux-xvfb.png" 2>/dev/null && echo "screenshot: dist/screenshots/linux-xvfb.png"
 
 echo "==> AppImage"
-AI="$(ls "$DIST"/Aar_*.AppImage | head -1)"
+AI="$DIST/Aar_${VERSION}_amd64.AppImage"
 chmod +x "$AI"
 (cd "$T" && "$AI" --appimage-extract-and-run --diagnose "$T/diag-ai.json") || true
 check "python3 -c \"import json,sys; d=json.load(open('$T/diag-ai.json')); assert d['bundledHelpers'] and '/usr/lib/Aar/python/bin/python3' in d['bundledPython'], d\"" "AppImage finds its runtime"
@@ -71,7 +73,7 @@ check "python3 -c \"import json,sys; d=json.load(open('$T/diag-ai.json')); asser
 echo "==> rpm"
 # Ubuntu's rpm2cpio exits with 1 on these (zstd) packages although the archive is complete.
 mkdir -p "$T/rpm"
-rpm2cpio "$(ls "$DIST"/Aar-*.rpm | head -1)" >"$T/rpm.cpio" || true
+rpm2cpio "$DIST/Aar-${VERSION}-1.x86_64.rpm" >"$T/rpm.cpio" || true
 (cd "$T/rpm" && cpio -idm --quiet <"$T/rpm.cpio") || true
 check "[[ -x '$T/rpm/usr/bin/aar-desktop' && -x '$T/rpm/usr/lib/Aar/python/bin/python3' ]]" "rpm: binary + runtime in /usr/lib/Aar"
 check "grep -q '^Exec=aar-desktop' '$T/rpm/usr/share/applications/'*.desktop" "rpm: desktop entry"
