@@ -19,6 +19,8 @@ use crate::agent_log::{log_path, AgentLog};
 use crate::settings::{valid_server_id, Settings, UserMcpServer};
 
 const STDERR_TAIL: usize = 200;
+/// How long aar may take to exit after its stdin closed before it is killed.
+const STOP_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
 
 #[derive(Default)]
 pub struct AgentProcess {
@@ -26,6 +28,9 @@ pub struct AgentProcess {
     stdin: Mutex<Option<ChildStdin>>,
     generation: AtomicU64,
     stderr_tail: Arc<Mutex<VecDeque<String>>>,
+    /// stderr lines ever read (never reset): a turn remembers it to get only its
+    /// own log lines, even when the rolling tail is full.
+    stderr_total: Arc<AtomicU64>,
     log: Arc<AgentLog>,
 }
 
@@ -129,7 +134,14 @@ impl McpDirs {
         if v.contains("{state}") {
             let dir = self.state.join(id);
             let _ = std::fs::create_dir_all(&dir);
-            v = v.replace("{state}", &dir.to_string_lossy());
+            let d = dir.to_string_lossy();
+            // `{state}\file` (older catalog entries) must not become a file named
+            // `memory\memory.jsonl` next to the folder on Linux.
+            let sep = std::path::MAIN_SEPARATOR;
+            v = v
+                .replace("{state}\\", &format!("{d}{sep}"))
+                .replace("{state}/", &format!("{d}{sep}"))
+                .replace("{state}", &d);
         }
         for (key, path) in [("{edge}", &self.browsers.edge), ("{chrome}", &self.browsers.chrome)] {
             if let Some(p) = path {
@@ -349,16 +361,21 @@ impl AgentProcess {
     /// Start (or restart) the agent. Returns the new generation id.
     pub fn start(&self, app: &AppHandle, settings: &Settings) -> Result<u64, String> {
         self.stop();
+        // Tool servers removed while the old aar still ran them (files were in use).
+        crate::addons::purge_removed(app);
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let cwd = settings.resolved_working_dir(app);
 
         let (program, prefix) = resolve_agent(app, &settings.agent_command)?;
+        let bundled = prefix.first().map(String::as_str) == Some("-m");
         let mut cmd = crate::platform::command(&program);
-        cmd.args(&prefix)
-            .args(settings.effective_args())
-            // Bundled runtime: never pick up packages from the user's own Python.
-            .env("PYTHONNOUSERSITE", "1")
-            .current_dir(&cwd)
+        cmd.args(&prefix).args(settings.effective_args());
+        // Bundled runtime: never pick up packages from the user's own Python. An own
+        // aar may live in the user site (`pip install --user`) and needs it.
+        if bundled {
+            cmd.env("PYTHONNOUSERSITE", "1");
+        }
+        cmd.current_dir(&cwd)
             .env("PYTHONUTF8", "1")
             .env("PYTHONIOENCODING", "utf-8")
             .env("AAR_LAUNCHED_BY", "aar-ui")
@@ -385,7 +402,7 @@ impl AgentProcess {
 
         if let Some(dir) = crate::addons::ext_dir(app) {
             // Bundled runtime: aar_desktop.boot adds it. Own Python: via PYTHONPATH.
-            if prefix.first().map(String::as_str) != Some("-m") {
+            if !bundled {
                 let rest = std::env::var_os("PYTHONPATH");
                 let mut parts = prefix_site_dirs(&dir);
                 if let Some(r) = rest {
@@ -436,15 +453,21 @@ impl AgentProcess {
 
         // stderr -> ring buffer (shown to the user when the agent dies).
         let tail = self.stderr_tail.clone();
+        let total = self.stderr_total.clone();
         let log = self.log.clone();
         thread::spawn(move || {
-            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            // Bytes, not lines(): tool servers share aar's stderr and may write in a
+            // Windows code page; a strict UTF-8 reader would stop here, the pipe would
+            // fill up and aar would hang at its next log line.
+            for raw in BufReader::new(stderr).split(b'\n').map_while(Result::ok) {
+                let line = String::from_utf8_lossy(&raw).trim_end_matches('\r').to_string();
                 log.line(&line);
                 let mut t = tail.lock().unwrap();
                 if t.len() >= STDERR_TAIL {
                     t.pop_front();
                 }
                 t.push_back(line);
+                total.fetch_add(1, Ordering::SeqCst);
             }
         });
 
@@ -494,23 +517,63 @@ impl AgentProcess {
     }
 
     pub fn stop(&self) {
-        // Closing stdin lets aar shut down cleanly; kill as a fallback.
+        // Closing stdin lets aar shut down cleanly (saves running sessions, stops
+        // its tool servers); kill only if it is still running after a grace period.
         self.stdin.lock().unwrap().take();
-        if let Some(child) = self.child.lock().unwrap().take() {
-            if let Ok(mut c) = child.lock() {
-                let _ = c.kill();
+        let Some(child) = self.child.lock().unwrap().take() else { return };
+        let deadline = std::time::Instant::now() + STOP_GRACE;
+        loop {
+            match child.lock() {
+                Ok(mut c) => match c.try_wait() {
+                    Ok(None) => {}
+                    _ => return,
+                },
+                Err(_) => return,
             }
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
+            thread::sleep(std::time::Duration::from_millis(50));
         }
+        if let Ok(mut c) = child.lock() {
+            let _ = c.kill();
+        };
     }
 
     pub fn stderr_tail(&self) -> String {
         self.stderr_tail.lock().unwrap().iter().cloned().collect::<Vec<_>>().join("\n")
     }
+
+    /// Number of stderr lines read so far (a mark for `stderr_since`).
+    pub fn stderr_mark(&self) -> u64 {
+        let _tail = self.stderr_tail.lock().unwrap();
+        self.stderr_total.load(Ordering::SeqCst)
+    }
+
+    /// stderr lines written after `mark` (as far as the rolling tail still has them).
+    pub fn stderr_since(&self, mark: u64) -> String {
+        let t = self.stderr_tail.lock().unwrap();
+        lines_since(&t, self.stderr_total.load(Ordering::SeqCst), mark)
+    }
+}
+
+fn lines_since(tail: &VecDeque<String>, total: u64, mark: u64) -> String {
+    let n = (total.saturating_sub(mark) as usize).min(tail.len());
+    tail.iter().skip(tail.len() - n).cloned().collect::<Vec<_>>().join("\n")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stderr_since_a_mark_even_with_a_full_tail() {
+        let tail: VecDeque<String> = (5..10).map(|i| format!("l{i}")).collect(); // 10 lines read, 5 kept
+        assert_eq!(lines_since(&tail, 10, 8), "l8\nl9");
+        assert_eq!(lines_since(&tail, 10, 10), "");
+        assert_eq!(lines_since(&tail, 10, 2), "l5\nl6\nl7\nl8\nl9", "older lines are gone");
+        assert_eq!(lines_since(&tail, 10, 12), "", "mark from the future");
+    }
 
     #[test]
     fn node_servers_start_their_bin_with_placeholders() {
@@ -546,6 +609,10 @@ mod tests {
         assert_eq!(s.args[1..], ["--executablePath", "C:/Edge/msedge.exe", "--chrome={chrome}"]);
         assert!(s.env[0].value.starts_with(&dirs.state.join("browser").to_string_lossy().into_owned()));
         assert!(dirs.state.join("browser").is_dir(), "{{state}} dir is created");
+        // Both separators after {state} become this system's separator (a file inside the dir).
+        let want = dirs.state.join("memory").join("memory.jsonl").to_string_lossy().into_owned();
+        assert_eq!(dirs.expand("memory", "{state}\\memory.jsonl"), want);
+        assert_eq!(dirs.expand("memory", "{state}/memory.jsonl"), want);
         std::fs::remove_dir_all(base).ok();
     }
 

@@ -65,11 +65,14 @@ const t = strings({
 export const permText = t;
 
 /** Tools that can do a lot of harm with one call (any command, script, deleting):
- * the widget only lets the user allow them for one conversation. */
+ * the widget only lets the user allow them for one conversation. Windows desktop:
+ * launch_app starts any program with arguments (e.g. PowerShell), send_keys and
+ * set_text type into whatever window has the focus (a console, Win+R). */
 const RISKY_TOOLS = new Set([
   "bash", "powershell", "acp_terminal", "run_command", "shell", "spawn_agent",
   "evaluate_script", "browser_evaluate", "upload_file", "browser_file_upload",
   "delete_file", "move_file",
+  "launch_app", "send_keys", "set_text",
 ]);
 
 export function shortName(tool: string): string {

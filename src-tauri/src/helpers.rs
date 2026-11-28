@@ -41,10 +41,18 @@ impl PyRuntime {
     /// Environment the helper processes need (PYTHONPATH for a normal Python).
     pub fn env(&self) -> Vec<(String, String)> {
         let mut env = vec![
-            ("PYTHONNOUSERSITE".to_string(), "1".to_string()),
             ("PYTHONUTF8".to_string(), "1".to_string()),
             ("PYTHONIOENCODING".to_string(), "utf-8".to_string()),
         ];
+        if self.bundled {
+            // Never pick up packages from a Python the user installed separately.
+            env.push(("PYTHONNOUSERSITE".into(), "1".into()));
+        } else {
+            // Own Python: aar may be a `pip install --user`, so keep the user site;
+            // but not the working folder in front of sys.path (`-m` puts it there),
+            // where a stray `mcp.py` or `json.py` would shadow real modules.
+            env.push(("PYTHONSAFEPATH".into(), "1".into()));
+        }
         if let Some(p) = &self.pythonpath {
             env.push(("PYTHONPATH".into(), prepend_path(p, std::env::var_os("PYTHONPATH"))));
         }

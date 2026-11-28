@@ -225,16 +225,19 @@ fn run_helper(app: &AppHandle, module: &str, args: &[String], progress: bool, ti
     let child = Arc::new(Mutex::new(child));
     *RUNNING.lock().unwrap() = Some(child.clone());
 
+    // Bytes, then lossy: pip/npm/compilers may print in a Windows code page, and a
+    // strict UTF-8 reader would stop reading (full pipe, the helper hangs).
     let err_thread = std::thread::spawn(move || {
-        let mut s = String::new();
-        let _ = stderr.read_to_string(&mut s);
-        s
+        let mut b = Vec::new();
+        let _ = stderr.read_to_end(&mut b);
+        String::from_utf8_lossy(&b).into_owned()
     });
     let reader_app = app.clone();
     let out_thread = std::thread::spawn(move || {
         let mut data = None;
         let mut tail: Vec<String> = vec![];
-        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+        for raw in BufReader::new(stdout).split(b'\n').map_while(Result::ok) {
+            let line = String::from_utf8_lossy(&raw).into_owned();
             if let Some(json) = line.strip_prefix("@@JSON ") {
                 data = serde_json::from_str::<Value>(json).ok();
                 continue;
@@ -336,7 +339,13 @@ pub fn mcp_install(app: &AppHandle, id: &str, requirement: &str, runtime: &str, 
         return Err(format!("invalid package: {requirement}"));
     }
     // Fresh install: a half-finished earlier attempt must not linger.
-    remove_dir(&dir)?;
+    remove_dir(&dir).map_err(|e| {
+        trf!(
+            "Der alte Ordner dieses Servers wird noch benutzt. Bitte die Einstellungen schließen (Aar startet neu) und es dann noch einmal versuchen. ({e})",
+            "This server's old folder is still in use. Please close the settings (Aar restarts) and then try again. ({e})",
+            "此服务器的旧文件夹仍在使用中。请关闭设置（Aar 会重新启动），然后再试一次。（{e}）"
+        )
+    })?;
     let mut args = vec!["install".into(), dir.to_string_lossy().into_owned(), requirement.trim().into()];
     if runtime == "node" && !bin.is_empty() {
         args.push(bin.into());
@@ -348,14 +357,36 @@ pub fn mcp_install(app: &AppHandle, id: &str, requirement: &str, runtime: &str, 
     Ok(r)
 }
 
+/// Marks a server folder that could not be deleted yet (files still in use by
+/// the running aar session, e.g. loaded `.pyd`); deleted at the next aar start.
+const REMOVE_MARKER: &str = ".aar-remove";
+
 /// Remove an installed server together with its data (`{state}`, e.g. the
-/// memory server's knowledge graph).
-pub fn mcp_remove(app: &AppHandle, id: &str) -> Result<(), String> {
-    remove_dir(&server_dir(app, id)?)?;
-    if let Some(state) = mcp_state_dir(app) {
-        remove_dir(&state.join(id))?;
+/// memory server's knowledge graph). `Ok(false)`: a folder is still in use
+/// (Windows) and is deleted when aar restarts.
+pub fn mcp_remove(app: &AppHandle, id: &str) -> Result<bool, String> {
+    let dirs = [Some(server_dir(app, id)?), mcp_state_dir(app).map(|s| s.join(id))];
+    let mut now = true;
+    for dir in dirs.into_iter().flatten() {
+        if remove_dir(&dir).is_err() && dir.exists() {
+            now = false;
+            let _ = std::fs::write(dir.join(REMOVE_MARKER), "");
+        }
     }
-    Ok(())
+    Ok(now)
+}
+
+/// Delete server folders that `mcp_remove` had to leave behind. Call while aar
+/// (and with it the servers) is stopped.
+pub fn purge_removed(app: &AppHandle) {
+    for root in [mcp_dir(app), mcp_state_dir(app)].into_iter().flatten() {
+        let Ok(entries) = std::fs::read_dir(root) else { continue };
+        for e in entries.flatten() {
+            if e.path().join(REMOVE_MARKER).is_file() {
+                let _ = std::fs::remove_dir_all(e.path());
+            }
+        }
+    }
 }
 
 /// Ids of the package servers that are installed.
@@ -364,7 +395,7 @@ pub fn mcp_installed(app: &AppHandle) -> Vec<String> {
     let Ok(entries) = std::fs::read_dir(root) else { return vec![] };
     entries
         .flatten()
-        .filter(|e| e.path().is_dir())
+        .filter(|e| e.path().is_dir() && !e.path().join(REMOVE_MARKER).exists())
         .filter_map(|e| e.file_name().to_str().map(String::from))
         .filter(|id| valid_server_id(id))
         .collect()

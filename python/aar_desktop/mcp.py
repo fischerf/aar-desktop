@@ -13,12 +13,12 @@ import importlib.metadata as md
 import sys
 from pathlib import Path
 
-from aar_desktop._site import add_front, build_isolation_args, pip_main
+from aar_desktop._site import PY_TAG, add_front, build_isolation_args, other_py_tag, pip_main, write_py_tag
 
 
 def cmd_install(target: Path, requirement: str) -> int:
     target.mkdir(parents=True, exist_ok=True)
-    return pip_main(
+    code = pip_main(
         [
             "install",
             "--target",
@@ -33,12 +33,24 @@ def cmd_install(target: Path, requirement: str) -> int:
             requirement,
         ]
     )
+    if code == 0:
+        write_py_tag(target)
+    return code
 
 
 def cmd_run(target: Path, script: str, args: list[str]) -> int:
     if not target.is_dir():
         print(f"MCP server not installed: {target}", file=sys.stderr)
         return 2
+    other = other_py_tag(target)
+    if other:
+        # Would fail later with an obscure import error (e.g. pydantic_core).
+        print(
+            f"MCP server in {target} was installed for Python {other}, aar now runs {PY_TAG}: "
+            "remove the server under Settings -> Tools and add it again.",
+            file=sys.stderr,
+        )
+        return 4
     add_front(target)
     for dist in md.distributions(path=[str(target)]):
         for ep in dist.entry_points:

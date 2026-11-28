@@ -62,6 +62,9 @@ interface ExtListData {
   aarVersion: string;
   supportsDisable: boolean;
   extensions: InstalledExt[];
+  /** Python tag the extensions were installed with, if not the current one. */
+  otherPython?: string;
+  python?: string;
 }
 
 export interface KeyValue {
@@ -129,7 +132,11 @@ const t = strings({
     removeSure: "Wirklich entfernen?",
     removing: "Entferne {name} …",
     removed: "{name} wurde entfernt.",
+    removedAfterRestart: "{name} wurde entfernt. Die letzten Dateien löscht Aar beim nächsten Neustart (beim Schließen der Einstellungen).",
+    otherPython: "Die Erweiterungen wurden mit Python {was} installiert, Aar läuft jetzt mit Python {now}. Lädt eine nicht, bitte entfernen und neu installieren.",
     removeFailed: "Entfernen von {name} fehlgeschlagen.",
+    pairEnv: "NAME=Wert",
+    pairHeader: "Name: Wert",
     enabled: "Eingeschaltet",
     whatItDoes: "Was macht diese Erweiterung genau?",
     hooksLabel: "Greift ein bei",
@@ -199,7 +206,11 @@ const t = strings({
     removeSure: "Really remove?",
     removing: "Removing {name} …",
     removed: "{name} was removed.",
+    removedAfterRestart: "{name} was removed. Aar deletes the last files at its next restart (when you close the settings).",
+    otherPython: "The extensions were installed with Python {was}, Aar now runs Python {now}. If one does not load, please remove and reinstall it.",
     removeFailed: "Removing {name} failed.",
+    pairEnv: "NAME=value",
+    pairHeader: "Name: value",
     enabled: "Switched on",
     whatItDoes: "What exactly does this extension do?",
     hooksLabel: "Steps in at",
@@ -268,7 +279,11 @@ const t = strings({
     removeSure: "确定移除？",
     removing: "正在移除 {name}…",
     removed: "{name} 已移除。",
+    removedAfterRestart: "{name} 已移除。剩余文件将在 Aar 下次重新启动时（关闭设置时）删除。",
+    otherPython: "这些扩展是用 Python {was} 安装的，Aar 现在使用 Python {now}。如果某个扩展无法加载，请将其移除后重新安装。",
     removeFailed: "移除 {name} 失败。",
+    pairEnv: "名称=值",
+    pairHeader: "名称: 值",
     enabled: "已开启",
     whatItDoes: "这个扩展具体做什么？",
     hooksLabel: "介入环节",
@@ -786,7 +801,7 @@ const MCP_CATALOG: CatalogEntry[] = [
     },
     package: "@modelcontextprotocol/server-memory@latest",
     script: "mcp-server-memory",
-    build: () => ({ args: [], env: [{ name: "MEMORY_FILE_PATH", value: "{state}\\memory.jsonl" }] }),
+    build: () => ({ args: [], env: [{ name: "MEMORY_FILE_PATH", value: "{state}/memory.jsonl" }] }),
     warnings: [
       {
         level: "info",
@@ -829,6 +844,14 @@ export function splitArgs(s: string): string[] {
   let m: RegExpExecArray | null;
   while ((m = re.exec(s))) out.push(m[1] ?? m[2]);
   return out;
+}
+
+const RESERVED_IDS = ["windows", "photos"];
+
+/** "cp313" → "3.13". */
+function pyVersion(tag: string): string {
+  const m = /^cp(\d)(\d+)$/.exec(tag);
+  return m ? `${m[1]}.${m[2]}` : tag;
 }
 
 function parsePairs(text: string, sep: "=" | ":", format: string): KeyValue[] {
@@ -993,6 +1016,8 @@ export class AddonsView {
       this.installed = list.data.extensions;
       this.supportsDisable = list.data.supportsDisable;
       this.listNote = this.supportsDisable ? "" : t("noDisable");
+      if (list.data.otherPython && this.installed.length)
+        this.listNote = `${this.listNote} ${t("otherPython", { was: pyVersion(list.data.otherPython), now: pyVersion(list.data.python ?? "") })}`.trim();
     } else {
       this.installed = [];
       // The backend's message says what is missing (e.g. no Python behind the agent program).
@@ -1046,7 +1071,8 @@ export class AddonsView {
   }
 
   private extCard(r: RegistryEntry | null, inst: InstalledExt | undefined): HTMLElement {
-    const known = r ? KNOWN_EXT[r.name] : undefined;
+    // Own keys only: a registry name like "constructor" must not hit Object.prototype.
+    const known = r && Object.prototype.hasOwnProperty.call(KNOWN_EXT, r.name) ? KNOWN_EXT[r.name] : undefined;
     const card = el("div", "addon");
     const head = el("div", "addon-head");
     const title = el("span", "addon-title", known ? tr3(known.title) : (r?.name ?? inst!.name));
@@ -1170,8 +1196,15 @@ export class AddonsView {
     } catch (e) {
       this.message = { text: t("installFailed", { name: label }), tone: "bad", details: this.errText(e) };
     }
-    this.busy = null;
+    this.setIdle();
     await this.loadExtensions(true);
+  }
+
+  /** `busy` blocks both tabs: when it ends, both must show it (not only the one
+   * that ran the job). */
+  private setIdle() {
+    this.busy = null;
+    this.rerender();
   }
 
   private async uninstall(x: InstalledExt, label: string) {
@@ -1193,7 +1226,7 @@ export class AddonsView {
     } catch (e) {
       this.message = { text: t("removeFailed", { name: label }), tone: "bad", details: this.errText(e) };
     }
-    this.busy = null;
+    this.setIdle();
     await this.loadExtensions(true);
   }
 
@@ -1379,7 +1412,8 @@ export class AddonsView {
 
   private uniqueId(base: string): string {
     let id = slugify(base);
-    if (id === "windows") id = "windows-2";
+    // Names of the servers the widget brings itself (desktop control, photo search).
+    if (RESERVED_IDS.includes(id)) id = `${id}-2`;
     let n = 2;
     const stem = id;
     while (this.servers.some((s) => s.id === id)) id = `${stem}-${n++}`;
@@ -1407,8 +1441,15 @@ export class AddonsView {
     if (await this.saveServers()) await this.installServer(s);
   }
 
+  /** Catalog servers in the current UI language (the stored label is in the
+   * language of the moment they were added). */
+  private serverLabel(s: UserMcpServer): string {
+    const c = MCP_CATALOG.find((x) => x.id === s.catalog);
+    return c ? tr3(c.title) : s.label;
+  }
+
   private async installServer(s: UserMcpServer) {
-    const label = MCP_CATALOG.find((c) => c.id === s.catalog) ? tr3(MCP_CATALOG.find((c) => c.id === s.catalog)!.title) : s.label;
+    const label = this.serverLabel(s);
     this.confirm = null;
     this.busy = s.kind === "node" ? t("mcpNodeFirst", { name: label }) : t("installing", { name: label });
     this.progressLine = "";
@@ -1428,7 +1469,7 @@ export class AddonsView {
     } catch (e) {
       this.mcpMessage = { text: t("installFailed", { name: label }), tone: "bad", details: this.errText(e) };
     }
-    this.busy = null;
+    this.setIdle();
     await this.showTools();
   }
 
@@ -1436,9 +1477,22 @@ export class AddonsView {
     this.confirm = null;
     this.servers = this.servers.filter((x) => x !== s);
     if (!(await this.saveServers())) return;
-    if (s.kind === "package" || s.kind === "node")
-      await invoke("mcp_remove", { id: s.id }).catch((e) => console.warn("mcp_remove", e));
-    this.mcpMessage = { text: t("removed", { name: s.label }), tone: "ok", details: "" };
+    const label = this.serverLabel(s);
+    let msg: { text: string; tone: "ok" | "bad"; details: string } = {
+      text: t("removed", { name: label }),
+      tone: "ok",
+      details: "",
+    };
+    if (s.kind === "package" || s.kind === "node") {
+      try {
+        // false: the running aar still uses some files (Windows); they go at its restart.
+        if (!(await invoke<boolean>("mcp_remove", { id: s.id })))
+          msg = { text: t("removedAfterRestart", { name: label }), tone: "ok", details: "" };
+      } catch (e) {
+        msg = { text: t("removeFailed", { name: label }), tone: "bad", details: this.errText(e) };
+      }
+    }
+    this.mcpMessage = msg;
     await this.showTools();
   }
 
@@ -1473,11 +1527,11 @@ export class AddonsView {
         s.command = v("mcp-command");
         if (!s.command) throw new Error(t("mcpErrCommand"));
         s.args = splitArgs(v("mcp-args"));
-        s.env = parsePairs(v("mcp-env"), "=", "NAME=Wert");
+        s.env = parsePairs(v("mcp-env"), "=", t("pairEnv"));
       } else {
         s.url = v("mcp-url");
         if (!/^https?:\/\/\S+$/i.test(s.url)) throw new Error(t("mcpErrUrl"));
-        s.headers = parsePairs(v("mcp-headers"), ":", "Name: Wert");
+        s.headers = parsePairs(v("mcp-headers"), ":", t("pairHeader"));
       }
       this.servers.push(s);
       if (!(await this.saveServers())) {

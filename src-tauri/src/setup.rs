@@ -285,6 +285,11 @@ pub fn ollama_status() -> OllamaStatus {
 /// Make sure the Ollama server answers; start it if needed.
 pub fn ollama_start(report: Reporter) -> Result<OllamaStatus, String> {
     CANCEL.store(false, Ordering::SeqCst);
+    start_server(report)
+}
+
+/// `ollama_start` without resetting a cancel request (after an installation).
+fn start_server(report: Reporter) -> Result<OllamaStatus, String> {
     if ollama_version(Duration::from_secs(2)).is_some() {
         return Ok(ollama_status());
     }
@@ -373,13 +378,27 @@ fn download(report: Reporter, url: &str, target: &std::path::Path) -> Result<(),
 #[cfg(windows)]
 pub fn ollama_install(report: Reporter) -> Result<OllamaStatus, String> {
     CANCEL.store(false, Ordering::SeqCst);
-    let target = std::env::temp_dir().join("OllamaSetup.exe");
-    download(report, OLLAMA_SETUP_URL, &target)?;
+    // Own name per process: no other program (or a second widget) can swap the
+    // file between download and start.
+    let target = std::env::temp_dir().join(format!("aar-OllamaSetup-{}.exe", std::process::id()));
+    let result = download(report, OLLAMA_SETUP_URL, &target).and_then(|()| run_installer(report, &target));
+    let _ = std::fs::remove_file(&target);
+    result?;
+    // Cancelled while the installer ran: Ollama is installed now, but neither
+    // started nor is the (multi-GB) model download begun.
+    check_cancel()?;
+    start_server(report)
+}
+
+/// Run Ollama's installer silently. It cannot be interrupted safely (half an
+/// installation), so a cancel only takes effect afterwards; at most 15 minutes.
+#[cfg(windows)]
+fn run_installer(report: Reporter, exe: &std::path::Path) -> Result<(), String> {
     emit(report, "install", installing_ollama(), 0, 0);
     // Ollama's installer is Inno Setup: per-user install, no admin rights needed.
-    let status = std::process::Command::new(&target)
+    let mut child = std::process::Command::new(exe)
         .args(["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-"])
-        .status()
+        .spawn()
         .map_err(|e| {
             trf!(
                 "Installer konnte nicht gestartet werden: {e}",
@@ -387,7 +406,22 @@ pub fn ollama_install(report: Reporter) -> Result<OllamaStatus, String> {
                 "无法启动安装程序：{e}"
             )
         })?;
-    let _ = std::fs::remove_file(&target);
+    let started = Instant::now();
+    let status = loop {
+        if let Some(st) = child.try_wait().map_err(|e| e.to_string())? {
+            break st;
+        }
+        if started.elapsed() > Duration::from_secs(15 * 60) {
+            let _ = child.kill();
+            return Err(tr(
+                "Installation fehlgeschlagen: Zeitüberschreitung",
+                "Installation failed: timed out",
+                "安装失败：超时",
+            )
+            .into());
+        }
+        std::thread::sleep(Duration::from_millis(300));
+    };
     if !status.success() {
         let code = status.code();
         return Err(trf!(
@@ -396,7 +430,7 @@ pub fn ollama_install(report: Reporter) -> Result<OllamaStatus, String> {
             "安装失败（代码 {code:?}）"
         ));
     }
-    ollama_start(report)
+    Ok(())
 }
 
 /// Download Ollama's Linux archive and unpack it into `~/.local` (no root,
@@ -420,7 +454,8 @@ pub fn ollama_install(report: Reporter) -> Result<OllamaStatus, String> {
         )
         .into());
     }
-    ollama_start(report)
+    check_cancel()?;
+    start_server(report)
 }
 
 /// Unpack a `.tar.zst` archive below `dest` (entries must stay inside it).
@@ -443,7 +478,12 @@ fn unpack_tar_zst(archive: &std::path::Path, dest: &std::path::Path) -> Result<(
 pub fn ollama_pull(report: Reporter, model: &str) -> Result<(), String> {
     CANCEL.store(false, Ordering::SeqCst);
     emit(report, "pull", trf!("Lade {model} …", "Downloading {model} …", "正在下载 {model} …"), 0, 0);
-    let resp = agent()
+    // Ollama stays silent while it verifies the digest of a finished download
+    // (minutes for a large model on a slow disk): a long read timeout.
+    let resp = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(5))
+        .timeout_read(Duration::from_secs(15 * 60))
+        .build()
         .post(&format!("{OLLAMA_URL}/api/pull"))
         .send_json(serde_json::json!({ "model": model, "stream": true }))
         .map_err(|e| {

@@ -19,13 +19,24 @@ import contextlib
 import importlib
 import importlib.metadata as md
 import json
+import os
 import re
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
-from aar_desktop._site import add_ext_site, build_isolation_args, ext_prefix, ext_site, is_within, pip_main
+from aar_desktop._site import (
+    PY_TAG,
+    add_ext_site,
+    build_isolation_args,
+    ext_prefix,
+    ext_site,
+    is_within,
+    other_py_tag,
+    pip_main,
+    write_py_tag,
+)
 
 #: Never installed as a dependency of an extension: aar comes with the app.
 AAR_DISTS = {"aar", "aar-agent"}
@@ -135,6 +146,9 @@ def cmd_list() -> int:
             "aarVersion": aar_version,
             "supportsDisable": hasattr(loader, "disabled_extension_names"),
             "extensions": entries,
+            # Installed with another Python (compiled dependencies may not load).
+            "otherPython": (other_py_tag(prefix) if (prefix := ext_prefix()) else None) or "",
+            "python": PY_TAG,
         }
     )
     return 0
@@ -219,6 +233,7 @@ def cmd_install(name: str, source: str) -> int:
         code = _pip([*_common_args(prefix), "--prefer-binary", *build_isolation_args(), *missing])
         if code:
             return code
+    write_py_tag(prefix)
     eps = [ep.name for ep in dist.entry_points if ep.group == "aar_extensions"]
     emit({"ok": True, "dist": dist.metadata["Name"], "version": dist.version, "entryPoints": eps})
     return 0
@@ -234,9 +249,46 @@ def cmd_uninstall(name: str) -> int:
         print(f"{name} is part of the app and cannot be removed", file=sys.stderr)
         return 4
     code = _pip(["uninstall", "-y", "--disable-pip-version-check", dist.metadata["Name"]])
-    if code == 0:
-        emit({"ok": True, "removed": True})
-    return code
+    if code:
+        return code
+    # In a venv pip refuses to touch files outside sys.prefix ("Not uninstalling
+    # …, outside environment") and still exits with 0: check, then remove the
+    # package's own files (RECORD) below the extension prefix ourselves.
+    left = _find_dist(name)
+    if left is not None and is_within(str(left.locate_file("")), ext_site()):
+        _remove_record_files(left)
+        left = _find_dist(name)
+    if left is not None:
+        print(f"{name} could not be removed completely", file=sys.stderr)
+        return 5
+    emit({"ok": True, "removed": True})
+    return 0
+
+
+def _remove_record_files(dist: md.Distribution) -> None:
+    import shutil
+
+    prefix, site = ext_prefix(), ext_site()
+    dirs: set[Path] = set()
+    for f in dist.files or []:
+        p = Path(str(dist.locate_file(f)))
+        if not is_within(p, prefix):
+            continue
+        with contextlib.suppress(OSError):
+            p.unlink()
+        dirs.add(p.parent)
+    info = getattr(dist, "_path", None)  # the .dist-info folder
+    if info is not None and is_within(info, site):
+        shutil.rmtree(info, ignore_errors=True)
+    # Empty package folders (and their __pycache__, which RECORD does not list).
+    for d in sorted(dirs, key=lambda d: len(d.parts), reverse=True):
+        while site is not None and is_within(d, site) and Path(os.path.realpath(d)) != Path(os.path.realpath(site)):
+            shutil.rmtree(d / "__pycache__", ignore_errors=True)
+            try:
+                d.rmdir()
+            except OSError:
+                break
+            d = d.parent
 
 
 def main(argv: list[str]) -> int:

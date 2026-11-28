@@ -43,6 +43,10 @@ MIN_BYTES = 1_000  # empty/broken files
 #: model (counted as "skipped" so the user sees why).
 MIN_EDGE = 64
 SKIPPED = "skipped:"
+MAX_TRIES = 3  # failed photos are retried in later runs up to this many times
+#: The model server answers with an error for this many photos in a row: stop
+#: the run (the server is broken, not the photos).
+MAX_HTTP_ERRORS = 3
 MODEL_EDGE = 1024  # longest side sent to the model (~1000 image tokens)
 THUMB_EDGE = 256
 HEARTBEAT = 5.0
@@ -128,7 +132,17 @@ def connect(cfg: Config) -> sqlite3.Connection:
             people INTEGER, scene TEXT, place TEXT, text TEXT,
             model TEXT, indexed_at REAL, error TEXT)"""
     )
+    # Failed attempts per photo (older indexes lack the column).
+    if "tries" not in {r[1] for r in db.execute("PRAGMA table_info(photos)")}:
+        db.execute("ALTER TABLE photos ADD COLUMN tries INTEGER DEFAULT 0")
+        db.commit()
     return db
+
+
+def retry_later(error: str, tries: int) -> bool:
+    """A failed photo (timeout, model error) is tried again in later runs, at most
+    MAX_TRIES times; skipped ones (too small) never."""
+    return bool(error) and not error.startswith(SKIPPED) and (tries or 0) < MAX_TRIES
 
 
 def scan(folders: list[Path]) -> dict[str, tuple[float, int]]:
@@ -380,7 +394,11 @@ def cmd_index(cfg: Config) -> int:
 
     def beat() -> None:  # the first image may wait minutes for the model to load
         while not stop_beat.wait(HEARTBEAT):
-            save()
+            # A virus scanner or the settings page reading progress.json can make
+            # the replace fail for a moment; the heartbeat must keep going, or a
+            # second indexer would start after STALE seconds.
+            with contextlib.suppress(OSError):
+                save()
 
     save()
     threading.Thread(target=beat, daemon=True).start()
@@ -391,15 +409,27 @@ def cmd_index(cfg: Config) -> int:
             return 3
         db = connect(cfg)
         found = scan(cfg.folders)
-        known = {row[0]: (row[1], row[2], row[3]) for row in db.execute("SELECT path, mtime, size, error FROM photos")}
-        # Forget photos that are gone or outside the chosen folders.
+        known = {
+            row[0]: (row[1], row[2], row[3] or "", row[4] or 0)
+            for row in db.execute("SELECT path, mtime, size, error, tries FROM photos")
+        }
+        # Forget photos that are gone or outside the chosen folders – but not those
+        # of a folder that is just not reachable right now (USB drive, NAS, VPN).
+        offline = [f for f in cfg.folders if not f.is_dir()]
         for path in set(known) - set(found):
+            if offline and in_folders(Path(path), offline):
+                continue
             db.execute("DELETE FROM photos WHERE path = ?", (path,))
             (cfg.thumbs / f"{path_key(path)}.jpg").unlink(missing_ok=True)
         db.commit()
-        todo = [p for p, (m, s) in found.items() if p not in known or known[p][0] != m or known[p][1] != s]
+
+        def unchanged(p: str) -> bool:
+            return p in known and known[p][0] == found[p][0] and known[p][1] == found[p][1]
+
+        todo = [p for p in found if not unchanged(p) or retry_later(known[p][2], known[p][3])]
         todo.sort(key=lambda p: -found[p][0])  # newest photos first
         state["total"] = len(todo)
+        http_errors = 0
         for path in todo:
             if cfg.stop_file.exists():
                 state["stopped"] = True
@@ -416,6 +446,15 @@ def cmd_index(cfg: Config) -> int:
                 else:
                     (cfg.thumbs / f"{path_key(path)}.jpg").write_bytes(_jpeg(img, THUMB_EDGE, 80))
                     row = describe(cfg, _model_jpeg(img))
+                    http_errors = 0
+            except urllib.error.HTTPError as exc:
+                # The server answered with an error (HTTPError is a URLError, but the
+                # server is reachable): this photo failed, try it again later.
+                error = f"Ollama HTTP {exc.code}: {exc.reason}"[:300]
+                http_errors += 1
+                if http_errors >= MAX_HTTP_ERRORS:
+                    state["error"] = error
+                    break
             except urllib.error.URLError as exc:
                 state["error"] = f"Ollama: {exc}"
                 break
@@ -424,12 +463,17 @@ def cmd_index(cfg: Config) -> int:
             if cfg.stop_file.exists():  # e.g. its folder was removed meanwhile (prune)
                 state["stopped"] = True
                 break
+            tries = 0
+            if error and not error.startswith(SKIPPED):
+                tries = (known[path][3] if unchanged(path) else 0) + 1
             db.execute(
-                "INSERT OR REPLACE INTO photos VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT OR REPLACE INTO photos (path, mtime, size, taken, width, height, description, objects,"
+                " people, scene, place, text, model, indexed_at, error, tries)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     path, mtime, size, taken or time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(mtime)),
                     width, height, row["description"], json.dumps(row["objects"]), row["people"],
-                    row["scene"], row["place"], row["text"], cfg.model, time.time(), error,
+                    row["scene"], row["place"], row["text"], cfg.model, time.time(), error, tries,
                 ),
             )
             db.commit()
@@ -490,14 +534,21 @@ def spawn_index(cfg: Config) -> bool:
 def status(cfg: Config) -> dict:
     db = connect(cfg)
     found = scan(cfg.folders)
-    rows = {r[0]: (r[1], r[2]) for r in db.execute("SELECT path, mtime, size FROM photos")}
-    indexed = sum(1 for p, v in found.items() if rows.get(p) == v)
+    rows = {
+        r[0]: ((r[1], r[2]), r[3] or "", r[4] or 0)
+        for r in db.execute("SELECT path, mtime, size, error, tries FROM photos")
+    }
+    # Failed photos that the next run tries again still count as pending.
+    indexed = sum(
+        1 for p, v in found.items() if p in rows and rows[p][0] == v and not retry_later(rows[p][1], rows[p][2])
+    )
     errors = db.execute("SELECT COUNT(*) FROM photos WHERE error != '' AND error NOT LIKE 'skipped:%'").fetchone()[0]
     skipped = db.execute("SELECT COUNT(*) FROM photos WHERE error LIKE 'skipped:%'").fetchone()[0]
     folders = []
     for f in cfg.folders:
+        # With a separator: "D:\Fotos" must not count "D:\Fotos 2024\…".
         prefix = str(f).rstrip("\\/").lower()
-        n = sum(1 for p in found if p.lower().startswith(prefix))
+        n = sum(1 for p in found if p.lower().startswith((prefix + "\\", prefix + "/")))
         folders.append({"path": str(f), "exists": f.is_dir(), "photos": n})
     prog = read_progress(cfg)
     return {

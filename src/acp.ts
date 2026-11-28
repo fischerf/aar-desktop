@@ -112,7 +112,12 @@ export class AcpClient {
   constructor(private handlers: AcpHandlers) {}
 
   async start(): Promise<void> {
+    // Until the new generation is known, nothing (e.g. the exit of a process
+    // this start replaces) may count as an event of the running agent.
+    this.generation = -1;
     await this.dispose();
+    // Requests to the replaced process never get an answer.
+    this.failAll(new Error(pick("Agent neu gestartet", "Agent restarted", "代理已重新启动")));
     this.unlisten.push(
       await listen<{ generation: number; line: string }>("agent://message", (e) => {
         if (e.payload.generation === this.generation) this.handleLine(e.payload.line);
@@ -193,6 +198,13 @@ export class AcpClient {
     this.notify("session/cancel", { sessionId });
   }
 
+  /** Free a session we leave (aar stops its tool servers, a running prompt is
+   * cancelled and saved). Best effort: older agents may not know the method. */
+  closeSession(sessionId: string) {
+    if (!this.running) return;
+    void this.request("session/close", { sessionId }, 30_000).catch((e) => console.warn("session/close failed", e));
+  }
+
   async setConfigOption(sessionId: string, configId: string, value: string | boolean): Promise<ConfigOption[]> {
     const r = await this.request<{ configOptions?: ConfigOption[] }>("session/set_config_option", {
       sessionId,
@@ -248,6 +260,7 @@ export class AcpClient {
       console.warn("non-JSON line from agent:", line);
       return;
     }
+    if (msg === null || typeof msg !== "object") return;
 
     // Response to one of our requests.
     if (msg.id !== undefined && msg.method === undefined) {
@@ -260,8 +273,9 @@ export class AcpClient {
 
     // Notification from the agent.
     if (msg.id === undefined) {
-      if (msg.method === "session/update") {
-        this.handlers.onUpdate(msg.params.sessionId, msg.params.update);
+      const p = msg.params;
+      if (msg.method === "session/update" && p && typeof p.sessionId === "string" && p.update) {
+        this.handlers.onUpdate(p.sessionId, p.update);
       }
       return;
     }

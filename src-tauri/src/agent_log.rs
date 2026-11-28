@@ -8,16 +8,38 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
 
-/// Rotate when the log grows beyond this at start-up.
+/// Rotate when the log grows beyond this (at start-up and while writing: a
+/// widget that runs for weeks must not grow the file without limit).
 const MAX_BYTES: u64 = 2 * 1024 * 1024;
+
+struct Open {
+    file: File,
+    path: PathBuf,
+    /// Size of the file as far as we know (start size + what we wrote).
+    size: u64,
+}
 
 #[derive(Default)]
 pub struct AgentLog {
-    file: Mutex<Option<File>>,
+    file: Mutex<Option<Open>>,
 }
 
 pub fn log_path(app: &AppHandle) -> Option<PathBuf> {
     app.path().app_log_dir().ok().map(|d| d.join("aar.log"))
+}
+
+/// Move a too big log to `aar.log.1` (replacing the older copy) and open a fresh one.
+fn open_rotated(path: &Path) -> Option<Open> {
+    let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    let size = if size > MAX_BYTES {
+        let old = path.with_extension("log.1");
+        let _ = std::fs::remove_file(&old);
+        if std::fs::rename(path, &old).is_ok() { 0 } else { size }
+    } else {
+        size
+    };
+    let file = OpenOptions::new().create(true).append(true).open(path).ok()?;
+    Some(Open { file, path: path.to_path_buf(), size })
 }
 
 impl AgentLog {
@@ -30,19 +52,23 @@ impl AgentLog {
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        if std::fs::metadata(path).map(|m| m.len() > MAX_BYTES).unwrap_or(false) {
-            let old = path.with_extension("log.1");
-            let _ = std::fs::remove_file(&old);
-            let _ = std::fs::rename(path, &old);
-        }
-        *guard = OpenOptions::new().create(true).append(true).open(path).ok();
+        *guard = open_rotated(path);
     }
 
     /// Append one line with a local timestamp. Never fails the caller.
     pub fn line(&self, text: &str) {
-        if let Some(f) = self.file.lock().unwrap().as_mut() {
-            let _ = writeln!(f, "{} {}", timestamp(), text.trim_end());
-            let _ = f.flush();
+        let mut guard = self.file.lock().unwrap();
+        let Some(open) = guard.as_mut() else { return };
+        let line = format!("{} {}\n", timestamp(), text.trim_end());
+        if open.file.write_all(line.as_bytes()).is_ok() {
+            open.size += line.len() as u64;
+        }
+        let _ = open.file.flush();
+        if open.size > MAX_BYTES {
+            // Windows cannot rename an open file: close it first.
+            let path = open.path.clone();
+            *guard = None;
+            *guard = open_rotated(&path);
         }
     }
 }
@@ -111,6 +137,14 @@ mod tests {
         log.line("fresh");
         assert!(std::fs::read_to_string(&path).unwrap().ends_with("fresh\n"));
         assert_eq!(std::fs::metadata(path.with_extension("log.1")).unwrap().len(), MAX_BYTES + 1);
+
+        // And while it is open: a long-running widget rotates as well.
+        let big = "y".repeat(64 * 1024);
+        for _ in 0..40 {
+            log.line(&big);
+        }
+        assert!(std::fs::metadata(&path).unwrap().len() < MAX_BYTES, "rotated while writing");
+        assert!(std::fs::metadata(path.with_extension("log.1")).unwrap().len() > MAX_BYTES);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

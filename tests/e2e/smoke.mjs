@@ -704,10 +704,21 @@ async function run(colorScheme) {
   await page.waitForFunction(() => !document.querySelector("#btn-send.stop"));
   await page.screenshot({ path: `${OUT}/photo-results-${colorScheme}.png` });
 
-  // New chat clears messages.
+  // New chat clears messages and lets aar close the old session (its tool servers).
+  const closedBefore = await page.evaluate(() => (window.__shim.closed ?? []).length);
   await page.click("#btn-new");
   await page.waitForTimeout(100);
   check(await page.locator(".msg.user").count() === 0, "new chat clears history");
+  check(await page.evaluate(() => (window.__shim.closed ?? []).length) === closedBefore + 1, "old session closed (session/close)");
+
+  // "New chat" in the middle of an answer: the old turn's end must not reach the new chat.
+  await page.fill("#input", "Was kannst du?");
+  await page.keyboard.press("Enter");
+  await page.waitForSelector("#btn-send.stop");
+  await page.click("#btn-new");
+  await page.waitForTimeout(500);
+  check(!(await page.locator("#messages").innerText()).includes("Abgebrochen"), "cancelled old turn stays out of the new chat");
+  check(await page.locator("#btn-send.stop").count() === 0 && await page.locator(".msg.user").count() === 0, "new chat idle after leaving a running turn");
 
   // Collapse with Escape.
   await page.keyboard.press("Escape");

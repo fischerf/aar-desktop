@@ -155,6 +155,7 @@ const t = strings({
     ollamaStarted: "Der lokale Modell-Server (Ollama) lief nicht – ich habe ihn gestartet.",
     ollamaStartFailed: "Der lokale Modell-Server (Ollama) ist installiert, ließ sich aber nicht starten. Ich kann ihn neu einrichten.",
     cancelling: "breche ab…",
+    cancelStuck: "Aar reagiert nicht auf das Abbrechen. Mit „Neu verbinden“ startet Aar neu (das Gespräch bleibt erhalten).",
     agentEnded: "Der Agent wurde beendet.",
     agentCrashed: "Der Agent ist abgestürzt (Code {code}).",
     connectFailed: "Verbindung zu Aar fehlgeschlagen: {error}",
@@ -370,6 +371,7 @@ const t = strings({
     ollamaStarted: "The local model server (Ollama) was not running – I started it.",
     ollamaStartFailed: "The local model server (Ollama) is installed but could not be started. I can set it up again.",
     cancelling: "cancelling…",
+    cancelStuck: "Aar is not responding to the cancel. “Reconnect” restarts Aar (the conversation is kept).",
     agentEnded: "The agent has stopped.",
     agentCrashed: "The agent crashed (code {code}).",
     connectFailed: "Could not connect to Aar: {error}",
@@ -585,6 +587,7 @@ const t = strings({
     ollamaStarted: "本地模型服务器（Ollama）没有运行 – 我已经启动了它。",
     ollamaStartFailed: "本地模型服务器（Ollama）已安装，但无法启动。我可以重新设置它。",
     cancelling: "正在取消…",
+    cancelStuck: "Aar 没有响应取消操作。点击“重新连接”会重新启动 Aar（对话会保留）。",
     agentEnded: "代理已停止。",
     agentCrashed: "代理崩溃了（代码 {code}）。",
     connectFailed: "无法连接 Aar：{error}",
@@ -762,6 +765,13 @@ let busy = false;
  * count: small models sometimes stop mid-thought without a word for the user. */
 let turnOutput = false;
 let sessionId: string | null = null;
+/** Session being created or loaded right now (sessionId is null meanwhile). */
+let opening: string | null = null;
+/** Counts turns and conversation switches: a turn (or a session/new|load)
+ * whose number is no longer current was left and must not touch the UI. */
+let turnGen = 0;
+/** The running session/prompt (to wait for its end before stopping aar). */
+let currentTurn: Promise<unknown> | null = null;
 let configOptions: ConfigOption[] = [];
 let streamingMsg: { el: HTMLElement; text: string } | null = null;
 let thought: { el: HTMLDetailsElement; body: HTMLElement; text: string } | null = null;
@@ -811,11 +821,25 @@ const client = new AcpClient({
 // Connection
 // ---------------------------------------------------------------------------
 
+/** Counts connection attempts: an attempt that was overtaken (aar stopped or
+ * restarted meanwhile) fails quietly instead of showing an error card. */
+let connectTry = 0;
+/** connect() was asked for again while connecting: run once more afterwards. */
+let connectAgain: boolean | null = null;
+
 async function connect(resume = true) {
-  if (connecting) return;
+  if (connecting) {
+    connectAgain = resume;
+    return;
+  }
+  const myTry = ++connectTry;
   connecting = true;
   connected = false;
   sessionId = null;
+  opening = null;
+  turnGen++;
+  busy = false;
+  currentTurn = null;
   ctx.size = 0;
   ctx.used = null;
   renderContext();
@@ -867,13 +891,21 @@ async function connect(resume = true) {
     });
   } catch (e) {
     mascot.set("offline");
-    const stderr = await invoke<string>("agent_stderr").catch(() => "");
-    addError(t("connectFailed", { error: errText(e) }), stderr, true);
+    // Overtaken (stopped for a restart, or asked again): not a failure to report.
+    if (myTry === connectTry && connectAgain === null) {
+      const stderr = await invoke<string>("agent_stderr").catch(() => "");
+      addError(t("connectFailed", { error: errText(e) }), stderr, true);
+    }
   } finally {
     early = null;
     connecting = false;
     updateComposer();
     refreshStatus(mascot.current);
+  }
+  if (connectAgain !== null) {
+    const again = connectAgain;
+    connectAgain = null;
+    await connect(again);
   }
 }
 
@@ -1085,30 +1117,60 @@ async function mcpServers(): Promise<McpServer[]> {
   return invoke<McpServer[]>("agent_mcp_servers").catch(() => []);
 }
 
-async function newChat() {
-  if (busy && sessionId) client.cancel(sessionId);
+/** Leave the current conversation: cancel its turn, let aar close the session
+ * (stops its tool servers) and make sure late answers of it are ignored. */
+function leaveSession() {
+  const old = sessionId;
+  if (old && client.running) {
+    if (busy) client.cancel(old);
+    client.closeSession(old);
+  }
+  turnGen++;
+  busy = false;
+  currentTurn = null;
   resolveAllPermissions(null);
+  finishStreaming();
+  sessionId = null;
+}
+
+async function newChat() {
+  if (!client.running) {
+    localStorage.removeItem(LAST_SESSION_KEY);
+    return connect(false);
+  }
+  leaveSession();
+  const gen = turnGen;
   localStorage.removeItem(LAST_SESSION_KEY);
   clearMessages();
   ctx.used = null;
   renderContext();
-  if (!client.running) return connect(false);
+  updateComposer();
+  opening = "";
   try {
     const cwd = await invoke<string>("agent_working_dir");
     early = [];
     const info = await client.newSession(cwd, await mcpServers());
+    if (gen !== turnGen) {
+      // Another conversation was opened meanwhile.
+      client.closeSession(info.sessionId);
+      return;
+    }
     sessionId = info.sessionId;
     configOptions = info.configOptions;
     localStorage.setItem(LAST_SESSION_KEY, sessionId);
-    busy = false;
     greet();
     flushEarly();
     mascot.set("idle");
   } catch (e) {
+    if (gen !== turnGen) return;
     early = null;
     addError(t("newChatFailed", { error: errText(e) }));
+  } finally {
+    if (gen === turnGen) {
+      opening = null;
+      updateComposer();
+    }
   }
-  updateComposer();
 }
 
 function greet() {
@@ -1181,6 +1243,10 @@ async function send() {
   autoGrow();
   removeSuggestions();
   addUser(text, images.map((i) => i.url));
+  const sid = sessionId;
+  const gen = ++turnGen;
+  // Left meanwhile (new/other conversation, reconnect)? Then this turn is over.
+  const mine = () => gen === turnGen;
   busy = true;
   turnOutput = false;
   turnTools.clear();
@@ -1189,16 +1255,21 @@ async function send() {
   const firstOfTurn = messages.childElementCount;
   updateComposer();
   mascot.set("thinking");
-  const stderrBefore = await invoke<string>("agent_stderr").catch(() => "");
+  // Only this turn's log lines count for "why was there no answer?".
+  const stderrMark = await invoke<number>("agent_stderr_mark").catch(() => null);
   try {
-    const reason = await client.prompt(sessionId, text, images);
+    if (!mine()) return;
+    const turn = client.prompt(sid, text, images);
+    currentTurn = turn;
+    const reason = await turn;
+    if (!mine()) return;
     finishStreaming();
     switch (reason) {
       case "end_turn":
         if (!turnOutput) {
           // aar ends the turn normally even when the provider failed (the
           // error only goes to its log) or the model stopped mid-thought.
-          await reportSilentTurn(stderrBefore);
+          await reportSilentTurn(stderrMark, mine);
           break;
         }
         llm.problem = false;
@@ -1224,22 +1295,32 @@ async function send() {
         mascot.set("idle");
     }
   } catch (e) {
+    if (!mine()) return;
     finishStreaming();
     if (client.running) {
       addError(t("somethingWrong", { error: errText(e) }));
       mascot.set("error", 4000);
     }
   } finally {
-    busy = false;
-    resolveAllPermissions(null);
-    updateComposer();
+    if (mine()) {
+      busy = false;
+      currentTurn = null;
+      resolveAllPermissions(null);
+      updateComposer();
+      // Add-ons changed during the answer: restart now.
+      if (addonsChanged) setTimeout(applyAddonChanges, 0);
+    }
   }
 }
 
-async function reportSilentTurn(stderrBefore: string) {
-  const after = await invoke<string>("agent_stderr").catch(() => "");
-  // Only the log lines written during this turn (the buffer is a rolling tail).
-  const fresh = after.startsWith(stderrBefore) ? after.slice(stderrBefore.length) : after;
+async function reportSilentTurn(stderrMark: number | null, mine: () => boolean) {
+  // Only the log lines written during this turn (counted in Rust, so a full
+  // rolling buffer does not bring back old errors).
+  const fresh =
+    stderrMark === null
+      ? await invoke<string>("agent_stderr").catch(() => "")
+      : await invoke<string>("agent_stderr_since", { mark: stderrMark }).catch(() => "");
+  if (!mine()) return;
   const lines = fresh.split("\n").filter((l) => /error|warn|fail|exception|refused/i.test(l));
   const details = lines.slice(-8).join("\n");
   const providerDown = /connect|connection|refused|timed? ?out|unreachable/i.test(details);
@@ -1251,6 +1332,7 @@ async function reportSilentTurn(stderrBefore: string) {
     const ep = await currentEndpoint().catch(() => ({ url: "", model: "" }));
     const r = ep.url ? await invoke<EndpointCheck>("check_endpoint", { url: ep.url }).catch(() => null) : null;
     if (r?.reachable) actions = modelActions(missing, r.models, isLocalUrl(ep.url) && /:11434(\/|$)/.test(ep.url));
+    if (!mine()) return;
   }
   addError(
     missing ? t("modelMissing", { model: missing }) : providerDown ? t("noAnswerProvider") : t("noAnswer"),
@@ -1261,11 +1343,18 @@ async function reportSilentTurn(stderrBefore: string) {
   mascot.set("error", 5000);
 }
 
+/** aar does not react to session/cancel within this time: offer a reconnect. */
+const CANCEL_STUCK_MS = 10_000;
+
 function stop() {
   if (busy && sessionId) {
     client.cancel(sessionId);
     resolveAllPermissions(null);
     setStatus(t("cancelling"), "busy");
+    const gen = turnGen;
+    setTimeout(() => {
+      if (busy && gen === turnGen) addError(t("cancelStuck"), "", true);
+    }, CANCEL_STUCK_MS);
   }
 }
 
@@ -1341,6 +1430,14 @@ function appendAgentText(text: string) {
     streamingMsg = { el, text: "" };
   }
   streamingMsg.text += text;
+  // Render the whole Markdown at most once per frame, not once per chunk.
+  if (!renderPending) renderPending = requestAnimationFrame(renderStreaming);
+}
+
+let renderPending = 0;
+function renderStreaming() {
+  renderPending = 0;
+  if (!streamingMsg) return;
   streamingMsg.el.innerHTML = renderMarkdown(streamingMsg.text);
   scrollDown();
 }
@@ -1361,6 +1458,10 @@ function appendThought(text: string) {
 }
 
 function finishStreaming() {
+  if (renderPending) {
+    cancelAnimationFrame(renderPending);
+    renderStreaming();
+  }
   if (streamingMsg) {
     streamingMsg.el.classList.remove("streaming");
     if (!streamingMsg.text.trim()) streamingMsg.el.remove();
@@ -1454,6 +1555,8 @@ const optionLabel = (kind: string): string | undefined =>
   ];
 
 function askPermission(req: PermissionRequest): Promise<string | null> {
+  // A conversation the user already left (its turn is being cancelled).
+  if (req.sessionId !== sessionId || !busy) return Promise.resolve(null);
   const tc = req.toolCall;
   const tool = (tc.title ?? "").trim();
   // allow_once also for granted tools: aar forgets its own "always" after the answer.
@@ -2412,25 +2515,62 @@ async function testConnection() {
 /** Extensions or tool servers changed while the settings were open: aar is
  * restarted when they close (extensions load at start, servers per session). */
 let addonsChanged = false;
-const addons = new AddonsView(() => (addonsChanged = true), errText);
-const photos = new PhotosView(() => (addonsChanged = true), errText);
+/** An install can finish after the settings were closed ("Fertig" during the
+ * download): then apply it right away – or after the running answer. */
+function addonsUpdated() {
+  addonsChanged = true;
+  applyAddonChanges();
+}
+const addons = new AddonsView(addonsUpdated, errText);
+const photos = new PhotosView(addonsUpdated, errText);
+
+/** Restart aar for changed add-ons once the settings are closed and no answer
+ * is running (a restart would cancel it). */
+function applyAddonChanges() {
+  if (!addonsChanged || !settingsView.hidden || busy || connecting) return;
+  addonsChanged = false;
+  void restartAgent();
+}
 
 function closeSettings() {
-  const wasOpen = !settingsView.hidden;
   photos.hide();
   settingsView.hidden = true;
   app.classList.remove("settings-open");
-  if (wasOpen && addonsChanged) {
-    addonsChanged = false;
-    void restartAgent();
+  applyAddonChanges();
+}
+
+/** Stop aar. A running turn is cancelled first and given a moment to end, so
+ * aar saves it (question, tool calls, partial answer) instead of losing it. */
+async function stopAgent() {
+  // The start that follows picks up changed add-ons anyway (no second restart
+  // from the end of the cancelled turn).
+  addonsChanged = false;
+  const turn = currentTurn;
+  if (busy && sessionId && turn) {
+    client.cancel(sessionId);
+    resolveAllPermissions(null);
+    setStatus(t("cancelling"), "busy");
+    await Promise.race([turn.catch(() => undefined), new Promise((r) => setTimeout(r, 10_000))]);
   }
+  turnGen++;
+  busy = false;
+  currentTurn = null;
+  resolveAllPermissions(null);
+  connectTry++; // a connection being set up right now fails quietly
+  await client.stop();
+}
+
+let quitting = false;
+async function quitApp() {
+  if (quitting) return;
+  quitting = true;
+  await stopAgent().catch(() => undefined);
+  await invoke("quit_app");
 }
 
 /** Restart aar with the current settings; the conversation is resumed. */
 async function restartAgent() {
-  if (busy && sessionId) client.cancel(sessionId);
-  await client.stop();
-  busy = false;
+  await stopAgent();
   addSystem(t("reconnecting"));
   await connect(true);
 }
@@ -2461,9 +2601,7 @@ const wizard = new SetupWizard({
       ? { ...current, provider: profile.key, model: "", baseUrl: "", contextWindow: 0 }
       : { ...current, provider: "ollama", model, baseUrl: "http://localhost:11434", contextWindow };
     await invoke("save_settings", { settings: next });
-    if (busy && sessionId) client.cancel(sessionId);
-    await client.stop();
-    busy = false;
+    await stopAgent();
     await connect(true);
     addSystem(t("setupDone", { model }));
     mascot.set("happy", 3000);
@@ -2502,9 +2640,7 @@ const wizard = new SetupWizard({
       };
     }
     await invoke("save_settings", { settings: next });
-    if (busy && sessionId) client.cancel(sessionId);
-    await client.stop();
-    busy = false;
+    await stopAgent();
     await connect(true);
     addSystem(t("setupDone", { model: cfg.name ? `${cfg.name} (${cfg.model})` : cfg.model }));
     mascot.set("happy", 3000);
@@ -2534,22 +2670,28 @@ const historyView = new HistoryView({
 
 /** Continue a saved conversation: aar replays it via session/update. */
 async function loadConversation(id: string) {
-  if (id === sessionId) return;
+  if (id === sessionId || id === opening) return;
   if (!client.running || !connected) {
     localStorage.setItem(LAST_SESSION_KEY, id);
     return connect(true);
   }
-  if (busy && sessionId) client.cancel(sessionId);
-  resolveAllPermissions(null);
-  busy = false;
+  leaveSession();
+  const gen = turnGen;
+  opening = id;
   clearMessages();
   ctx.used = null;
   renderContext();
-  sessionId = null;
+  updateComposer();
   early = [];
+  let failed: unknown = null;
   try {
     const cwd = await invoke<string>("agent_working_dir");
     const info = await client.loadSession(id, cwd, await mcpServers());
+    if (gen !== turnGen) {
+      // Another conversation was opened meanwhile (not this one again).
+      if (info && opening !== id && sessionId !== id) client.closeSession(id);
+      return;
+    }
     if (!info) throw new Error(`unknown session ${id}`);
     sessionId = info.sessionId;
     configOptions = info.configOptions;
@@ -2559,10 +2701,16 @@ async function loadConversation(id: string) {
     mascot.set("idle");
     scrollDown(true);
   } catch (e) {
+    if (gen !== turnGen) return;
     early = null;
     finishStreaming();
+    failed = e;
+  } finally {
+    if (gen === turnGen) opening = null;
+  }
+  if (failed !== null) {
     await newChat();
-    addError(t("loadFailed"), errText(e));
+    addError(t("loadFailed"), errText(failed));
   }
   updateComposer();
 }
@@ -2740,7 +2888,7 @@ $("btn-settings-done").addEventListener("click", closeSettings);
 for (const b of document.querySelectorAll<HTMLElement>("#settings [data-tab]")) {
   b.addEventListener("click", () => showTab(b.dataset.tab as Tab));
 }
-$("btn-quit").addEventListener("click", () => void invoke("quit_app"));
+$("btn-quit").addEventListener("click", () => void quitApp());
 $("btn-open-sessions").addEventListener("click", () => void openDiagnostic("sessions"));
 $("btn-copy-version").addEventListener("click", () => {
   void navigator.clipboard?.writeText($("version-info").textContent ?? "").then(
@@ -2807,10 +2955,11 @@ void listen("ui://open", () => void setExpanded(true));
 void listen("ui://new-chat", () => void newChat());
 void listen("ui://settings", () => void openSettings());
 void listen("ui://restart-agent", async () => {
-  await client.stop();
+  await stopAgent();
   clearMessages();
   void connect();
 });
+void listen("ui://quit", () => void quitApp());
 
 translateStatic();
 setupMascotPointer();

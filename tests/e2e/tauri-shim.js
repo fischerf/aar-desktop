@@ -226,6 +226,10 @@
       case "session/cancel":
         cancelled = true;
         return;
+      case "session/close":
+        // (The widget sends session/cancel first when a turn runs.)
+        window.__shim.closed = [...(window.__shim.closed ?? []), params.sessionId];
+        return agentSay({ jsonrpc: "2.0", id, result: {} });
       case "session/set_config_option":
         for (const o of configOptions) if (o.id === params.configId) o.currentValue = params.value;
         return agentSay({ jsonrpc: "2.0", id, result: { configOptions } });
@@ -367,6 +371,10 @@
           return null;
         case "agent_stderr":
           return stderr;
+        case "agent_stderr_mark":
+          return stderr.split("\n").length - 1;
+        case "agent_stderr_since":
+          return stderr.split("\n").slice(args.mark, -1).join("\n");
         case "agent_mcp_servers": {
           const out = settings.desktopControl
             ? [{ name: "windows", command: "C:/Aar/python/python.exe", args: ["-m", "windows_mcp.server"], env: [] }]
@@ -419,7 +427,7 @@
           return { edge: "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe", chrome: null };
         case "mcp_remove":
           mcpInstalled.delete(args.id);
-          return null;
+          return true;
         case "photos_status": {
           const f = settings.photoFolders ?? [];
           window.__shim.photoStatusCalls = (window.__shim.photoStatusCalls ?? 0) + 1;

@@ -156,6 +156,26 @@ pub struct KeyValue {
     pub value: String,
 }
 
+/// Text of a settings file as editors and PowerShell 5.1 write it: UTF-8 (with or
+/// without BOM), UTF-16 with BOM (`Out-File`), otherwise ANSI read as Latin-1.
+fn decode_text(bytes: &[u8]) -> String {
+    let utf16 = |le: bool| {
+        let units: Vec<u16> = bytes[2..]
+            .chunks_exact(2)
+            .map(|c| if le { u16::from_le_bytes([c[0], c[1]]) } else { u16::from_be_bytes([c[0], c[1]]) })
+            .collect();
+        String::from_utf16_lossy(&units)
+    };
+    match bytes {
+        [0xFF, 0xFE, ..] => utf16(true),
+        [0xFE, 0xFF, ..] => utf16(false),
+        _ => match std::str::from_utf8(bytes) {
+            Ok(s) => s.to_string(),
+            Err(_) => bytes.iter().map(|&b| b as char).collect(),
+        },
+    }
+}
+
 /// Server ids double as directory names and MCP server names.
 pub fn valid_server_id(id: &str) -> bool {
     !id.is_empty()
@@ -169,11 +189,39 @@ impl Settings {
         app.path().app_config_dir().ok().map(|d| d.join("settings.json"))
     }
 
+    /// Only a missing file means "defaults". A file that cannot be read as a whole
+    /// keeps every field that still fits (API keys, servers, …); whenever something
+    /// is dropped, the original is copied to `settings.json.<time>.bad` first,
+    /// because the next save rewrites the file.
     pub fn load(app: &AppHandle) -> Self {
-        Self::path(app)
-            .and_then(|p| std::fs::read_to_string(p).ok())
-            .and_then(|s| Self::parse(&s))
-            .unwrap_or_default()
+        let Some(path) = Self::path(app) else { return Self::default() };
+        let bytes = match std::fs::read(&path) {
+            Ok(b) => b,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Self::default(),
+            Err(e) => {
+                // Locked or unreadable right now: do not touch the file.
+                eprintln!("settings: cannot read {}: {e}", path.display());
+                return Self::default();
+            }
+        };
+        let text = decode_text(&bytes);
+        if let Some(s) = Self::parse(&text) {
+            return s;
+        }
+        let (settings, dropped) = Self::parse_lenient(&text).unwrap_or_else(|| (Self::default(), vec!["*".into()]));
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let backup = path.with_file_name(format!("settings.json.{stamp}.bad"));
+        let moved = std::fs::copy(&path, &backup).is_ok();
+        eprintln!(
+            "settings: {} could not be read completely (dropped: {}); original {}",
+            path.display(),
+            dropped.join(", "),
+            if moved { format!("kept as {}", backup.display()) } else { "could not be copied".into() }
+        );
+        settings
     }
 
     /// Tolerates a UTF-8 BOM (PowerShell 5.1 `Set-Content -Encoding UTF8`
@@ -182,13 +230,39 @@ impl Settings {
         serde_json::from_str(text.trim_start_matches('\u{feff}')).ok()
     }
 
+    /// Valid JSON with a field of the wrong type: keep all fields that fit.
+    /// Returns the settings and the names of the fields that were dropped.
+    fn parse_lenient(text: &str) -> Option<(Self, Vec<String>)> {
+        let value: serde_json::Value = serde_json::from_str(text.trim_start_matches('\u{feff}')).ok()?;
+        let fields = value.as_object()?;
+        let mut acc = serde_json::to_value(Self::default()).ok()?;
+        let mut dropped = vec![];
+        for (key, val) in fields {
+            let mut trial = acc.clone();
+            trial.as_object_mut()?.insert(key.clone(), val.clone());
+            if serde_json::from_value::<Self>(trial.clone()).is_ok() {
+                acc = trial;
+            } else {
+                dropped.push(key.clone());
+            }
+        }
+        Some((serde_json::from_value(acc).ok()?, dropped))
+    }
+
+    /// Write to a temporary file and rename it over the old one, so a crash or
+    /// a full disk never leaves a half-written settings.json behind.
     pub fn save(&self, app: &AppHandle) -> Result<(), String> {
         let path = Self::path(app).ok_or("no config dir")?;
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
         let json = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
-        std::fs::write(path, json).map_err(|e| e.to_string())
+        let tmp = path.with_file_name("settings.json.tmp");
+        std::fs::write(&tmp, json).map_err(|e| e.to_string())?;
+        std::fs::rename(&tmp, &path).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            e.to_string()
+        })
     }
 
     /// The active custom provider when `provider` is `custom:<id>`.
@@ -360,6 +434,32 @@ mod tests {
         assert_eq!(s.language, "en");
         assert_eq!(s.mcp_servers[0].id, "fetch");
         assert!(s.autostart);
+    }
+
+    #[test]
+    fn settings_in_utf16_or_ansi_load() {
+        let json = "{\"language\":\"en\",\"workingDir\":\"C:\\\\Users\\\\Jörg\"}";
+        let mut utf16 = vec![0xFF, 0xFE];
+        utf16.extend(json.encode_utf16().flat_map(|u| u.to_le_bytes()));
+        let s = Settings::parse(&decode_text(&utf16)).expect("UTF-16 (Out-File) must load");
+        assert_eq!(s.language, "en");
+        assert_eq!(s.working_dir, "C:\\Users\\Jörg");
+        let ansi: Vec<u8> = json.chars().map(|c| c as u32 as u8).collect();
+        let s = Settings::parse(&decode_text(&ansi)).expect("ANSI must load");
+        assert_eq!(s.working_dir, "C:\\Users\\Jörg");
+    }
+
+    #[test]
+    fn one_bad_field_keeps_the_others() {
+        let text = r#"{"language":"en","autostart":"yes","apiKeys":{"anthropic":"sk-1"},"allowedTools":["click"]}"#;
+        assert!(Settings::parse(text).is_none(), "strict parse rejects the wrong type");
+        let (s, dropped) = Settings::parse_lenient(text).expect("valid JSON");
+        assert_eq!(dropped, vec!["autostart".to_string()]);
+        assert_eq!(s.language, "en");
+        assert!(s.autostart, "dropped field falls back to its default");
+        assert_eq!(s.api_keys.get("anthropic").map(String::as_str), Some("sk-1"));
+        assert_eq!(s.allowed_tools, vec!["click".to_string()]);
+        assert!(Settings::parse_lenient("{\"language\":").is_none());
     }
 
     #[test]

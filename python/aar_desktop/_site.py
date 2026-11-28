@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import site
 import sys
@@ -62,6 +63,27 @@ def pip_main(args: list[str]) -> int:
     from pip._internal.cli.main import main
 
     return int(main(args) or 0)
+
+
+#: Compiled packages (pydantic_core, …) only work with the Python they were
+#: installed for: bundled runtime 3.13 vs. the user's own aar on e.g. 3.12.
+PY_TAG = f"cp{sys.version_info.major}{sys.version_info.minor}"
+PY_TAG_FILE = ".aar-python"
+
+
+def write_py_tag(folder: Path) -> None:
+    with contextlib.suppress(OSError):
+        (folder / PY_TAG_FILE).write_text(PY_TAG, encoding="ascii")
+
+
+def other_py_tag(folder: Path) -> str | None:
+    """The Python tag *folder* was installed for, if it is not this Python's
+    (None: same Python, or installed before the tag existed)."""
+    try:
+        tag = (folder / PY_TAG_FILE).read_text(encoding="ascii").strip()
+    except OSError:
+        return None
+    return tag if tag and tag != PY_TAG else None
 
 
 def is_within(path: Path | str, root: Path | None) -> bool:

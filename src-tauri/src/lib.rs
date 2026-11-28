@@ -220,13 +220,31 @@ fn show_and_toggle(app: &AppHandle) {
 fn register_hotkey(app: &AppHandle, spec: &str) -> Result<(), String> {
     let state = app.state::<AppState>();
     let gs = app.global_shortcut();
-    if let Some(old) = state.hotkey.lock().unwrap().take() {
+    // Parse before touching the old shortcut; if the new one is taken, the old one
+    // comes back (the user keeps a working hotkey).
+    let shortcut: Shortcut = spec.parse().map_err(|e| {
+        trf!(
+            "Ungültiges Tastenkürzel „{spec}“: {e}",
+            "Invalid keyboard shortcut “{spec}”: {e}",
+            "无效的快捷键“{spec}”：{e}"
+        )
+    })?;
+    let old = state.hotkey.lock().unwrap().take();
+    if let Some(old) = old {
         let _ = gs.unregister(old);
     }
-    let shortcut: Shortcut = spec
-        .parse()
-        .map_err(|e| format!("Ungültiger Hotkey '{spec}': {e}"))?;
-    gs.register(shortcut).map_err(|e| format!("Hotkey '{spec}' nicht verfügbar: {e}"))?;
+    if let Err(e) = gs.register(shortcut) {
+        if let Some(old) = old {
+            if gs.register(old).is_ok() {
+                *state.hotkey.lock().unwrap() = Some(old);
+            }
+        }
+        return Err(trf!(
+            "Tastenkürzel „{spec}“ ist nicht verfügbar (von einem anderen Programm belegt?): {e}",
+            "Keyboard shortcut “{spec}” is not available (used by another program?): {e}",
+            "快捷键“{spec}”不可用（是否被其他程序占用？）：{e}"
+        ));
+    }
     *state.hotkey.lock().unwrap() = Some(shortcut);
     Ok(())
 }
@@ -246,8 +264,18 @@ fn get_settings(state: State<AppState>) -> Settings {
 }
 
 #[tauri::command]
-fn save_settings(app: AppHandle, state: State<AppState>, settings: Settings) -> Result<(), String> {
-    let hotkey_changed = state.settings.lock().unwrap().hotkey != settings.hotkey;
+fn save_settings(app: AppHandle, state: State<AppState>, mut settings: Settings) -> Result<(), String> {
+    let old_hotkey = state.settings.lock().unwrap().hotkey.clone();
+    // A new hotkey first: if it is not available, the old one stays (also in the
+    // saved file) and everything else is still saved and applied.
+    let hotkey_error = if old_hotkey != settings.hotkey {
+        register_hotkey(&app, &settings.hotkey).err()
+    } else {
+        None
+    };
+    if hotkey_error.is_some() {
+        settings.hotkey = old_hotkey;
+    }
     {
         // Window placement is owned by the backend, never by the settings form.
         let mut s = state.settings.lock().unwrap();
@@ -264,18 +292,19 @@ fn save_settings(app: AppHandle, state: State<AppState>, settings: Settings) -> 
         s.allowed_tools = allowed;
         s.save(&app)?;
     }
-    if hotkey_changed {
-        let spec = state.settings.lock().unwrap().hotkey.clone();
-        register_hotkey(&app, &spec)?;
-    }
     apply_autostart(state.settings.lock().unwrap().autostart);
-    Ok(())
+    hotkey_error.map_or(Ok(()), Err)
 }
 
+// Start and stop wait for the old aar to exit (up to a few seconds): off the UI thread.
 #[tauri::command]
-fn agent_start(app: AppHandle, state: State<AppState>, proc_: State<AgentProcess>) -> Result<u64, String> {
-    let settings = state.settings.lock().unwrap().clone();
-    proc_.start(&app, &settings)
+async fn agent_start(app: AppHandle) -> Result<u64, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let settings = app.state::<AppState>().settings.lock().unwrap().clone();
+        app.state::<AgentProcess>().start(&app, &settings)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -284,13 +313,25 @@ fn agent_send(proc_: State<AgentProcess>, line: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn agent_stop(proc_: State<AgentProcess>) {
-    proc_.stop();
+async fn agent_stop(app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || app.state::<AgentProcess>().stop())
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn agent_stderr(proc_: State<AgentProcess>) -> String {
     proc_.stderr_tail()
+}
+
+#[tauri::command]
+fn agent_stderr_mark(proc_: State<AgentProcess>) -> u64 {
+    proc_.stderr_mark()
+}
+
+#[tauri::command]
+fn agent_stderr_since(proc_: State<AgentProcess>, mark: u64) -> String {
+    proc_.stderr_since(mark)
 }
 
 /// MCP servers to pass to aar with each session: the bundled Windows desktop
@@ -439,7 +480,7 @@ async fn pick_folder(app: AppHandle) -> Option<String> {
 }
 
 #[tauri::command]
-async fn mcp_remove(app: AppHandle, id: String) -> Result<(), String> {
+async fn mcp_remove(app: AppHandle, id: String) -> Result<bool, String> {
     blocking(move || addons::mcp_remove(&app, &id)).await?
 }
 
@@ -595,12 +636,22 @@ struct TurnFile {
 /// found in the turn (tool inputs, commands, the answer) plus anything new
 /// directly in Desktop, Documents, Downloads and the working folder - e.g. a
 /// PDF a PowerShell command produced without naming the path literally.
+/// Async + blocking pool: file checks (slow disks, mapped drives) never hold up the UI.
 #[tauri::command]
-fn turn_files(app: AppHandle, state: State<AppState>, since_ms: u64, candidates: Vec<String>) -> Vec<TurnFile> {
-    let wd = state.settings.lock().unwrap().resolved_working_dir(&app);
+async fn turn_files(app: AppHandle, since_ms: u64, candidates: Vec<String>) -> Result<Vec<TurnFile>, String> {
+    tauri::async_runtime::spawn_blocking(move || turn_files_blocking(&app, since_ms, candidates))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+fn turn_files_blocking(app: &AppHandle, since_ms: u64, candidates: Vec<String>) -> Vec<TurnFile> {
+    let app = app.clone();
+    let wd = app.state::<AppState>().settings.lock().unwrap().resolved_working_dir(&app);
     let since = std::time::UNIX_EPOCH + std::time::Duration::from_millis(since_ms.saturating_sub(2000));
     let mut paths: Vec<std::path::PathBuf> = candidates
         .iter()
+        .filter(|c| files::is_local_candidate(c))
+        .take(200)
         .map(|c| {
             let p = std::path::PathBuf::from(c.trim());
             if p.is_absolute() { p } else { wd.join(p) }
@@ -731,8 +782,18 @@ async fn check_provider(
     api_key: String,
     model: Option<String>,
 ) -> Result<llm_config::EndpointCheck, String> {
+    // Empty field = test the stored key – but only against the server it is used
+    // with anyway (official API or the saved address), never a URL typed just now.
     let key = if api_key.trim().is_empty() {
-        state.settings.lock().unwrap().api_keys.get(&kind).cloned().unwrap_or_default()
+        let s = state.settings.lock().unwrap();
+        let norm = |u: &str| u.trim().trim_end_matches('/').to_ascii_lowercase();
+        let known_target =
+            base_url.trim().is_empty() || (s.provider.trim() == kind && norm(&s.base_url) == norm(&base_url));
+        if known_target {
+            s.api_keys.get(&kind).cloned().unwrap_or_default()
+        } else {
+            String::new()
+        }
     } else {
         api_key
     };
@@ -810,6 +871,10 @@ fn hide_window(app: AppHandle, window: WebviewWindow) {
 #[tauri::command]
 fn quit_app(app: AppHandle) {
     persist_anchor(&app);
+    // aar gets a moment to save the conversation; nothing should be visible meanwhile.
+    for w in app.webview_windows().values() {
+        let _ = w.hide();
+    }
     app.state::<AgentProcess>().stop();
     app.exit(0);
 }
@@ -981,7 +1046,16 @@ pub fn run() {
                         show_and_toggle_open(app);
                         let _ = app.emit("ui://settings", ());
                     }
-                    "quit" => quit_app(app.clone()),
+                    "quit" => {
+                        // The widget cancels a running turn first (aar saves it) and
+                        // then calls quit_app; quit anyway if it does not answer.
+                        let _ = app.emit("ui://quit", ());
+                        let app = app.clone();
+                        std::thread::spawn(move || {
+                            std::thread::sleep(std::time::Duration::from_secs(15));
+                            quit_app(app);
+                        });
+                    }
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
@@ -1039,6 +1113,8 @@ pub fn run() {
             agent_send,
             agent_stop,
             agent_stderr,
+            agent_stderr_mark,
+            agent_stderr_since,
             agent_working_dir,
             agent_mcp_servers,
             diagnostic_paths,

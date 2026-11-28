@@ -17,6 +17,15 @@ pub fn is_document(p: &Path) -> bool {
         .is_some_and(|e| DOCUMENTS.contains(&e.to_ascii_lowercase().as_str()))
 }
 
+/// A path the widget may look at: never a network or device path (`\\host\share`,
+/// `//host/share`, `\\?\…`, `\\.\…`) – just checking it would make Windows connect
+/// to that host with the user's credentials (and block until a timeout).
+pub fn is_local_candidate(path: &str) -> bool {
+    let b = path.trim().as_bytes();
+    let sep = |c: u8| c == b'\\' || c == b'/';
+    !(b.len() >= 2 && sep(b[0]) && sep(b[1]))
+}
+
 /// Existing files among `paths` modified at or after `since`, newest first,
 /// without duplicates (case-insensitive, like Windows paths).
 pub fn recent(paths: Vec<PathBuf>, since: SystemTime) -> Vec<PathBuf> {
@@ -46,6 +55,16 @@ mod tests {
         }
         for bad in ["a.exe", "b.bat", "c.ps1", "d.lnk", "e.js", "f.vbs", "g.msi", "noext"] {
             assert!(!is_document(Path::new(bad)), "{bad}");
+        }
+    }
+
+    #[test]
+    fn network_and_device_paths_are_never_checked() {
+        for ok in ["C:\\Users\\a\\b.pdf", "C:/x.md", "/home/a/b.pdf", "report.pdf", "Z:\\share.pdf", " D:\\a.txt"] {
+            assert!(is_local_candidate(ok), "{ok}");
+        }
+        for bad in ["\\\\host\\share\\x.pdf", "//host/share/x.pdf", "\\\\?\\C:\\x.pdf", "\\\\.\\pipe\\x", "\\/host/x.pdf", " \\\\h\\s.md"] {
+            assert!(!is_local_candidate(bad), "{bad}");
         }
     }
 

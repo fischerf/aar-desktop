@@ -425,8 +425,12 @@ export class PhotosView {
         return this.render();
       }
       this.confirmClear = false;
-      await invoke("photos_clear").catch((e) => (this.note = { text: this.errText(e), tone: "bad" }));
-      this.note = { text: t("cleared"), tone: "ok" };
+      try {
+        await invoke("photos_clear");
+        this.note = { text: t("cleared"), tone: "ok" };
+      } catch (e) {
+        this.note = { text: this.errText(e), tone: "bad" };
+      }
       await this.refresh();
     });
     clear.disabled = !!st?.running || !st?.indexed;

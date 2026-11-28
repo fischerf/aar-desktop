@@ -154,11 +154,24 @@ pub fn index_stop(app: &AppHandle) -> Result<(), String> {
 pub fn clear(app: &AppHandle) -> Result<(), String> {
     let dir = photo_db_dir(app).ok_or("no data dir")?;
     let _ = index_stop(app);
-    std::thread::sleep(Duration::from_millis(300));
-    if dir.exists() {
-        std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
+    // The indexer needs a moment to notice the stop file and close index.sqlite;
+    // until then Windows refuses to delete it. Retry for a few seconds.
+    let started = std::time::Instant::now();
+    loop {
+        std::thread::sleep(Duration::from_millis(300));
+        match std::fs::remove_dir_all(&dir) {
+            Ok(()) => return Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) if started.elapsed() > Duration::from_secs(8) => {
+                return Err(trf!(
+                    "Der Index konnte nicht ganz gelöscht werden (wird gerade benutzt?): {e}",
+                    "The index could not be deleted completely (still in use?): {e}",
+                    "无法完全删除索引（仍在使用中？）：{e}"
+                ))
+            }
+            Err(_) => {}
+        }
     }
-    Ok(())
 }
 
 /// FNV-1a 64 of the lower-cased path – the thumbnail name used by
