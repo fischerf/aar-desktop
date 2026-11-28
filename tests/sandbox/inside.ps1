@@ -11,6 +11,7 @@ function Result($name, $ok, $detail = "") {
   [void]$results.Add([ordered]@{ name = $name; ok = [bool]$ok; detail = "$detail" })
   Log ("{0} {1} {2}" -f ($(if ($ok) { "PASS" } else { "FAIL" })), $name, $detail)
 }
+. "$in\webview_fix.ps1"
 
 Add-Type -AssemblyName System.Drawing
 Add-Type @"

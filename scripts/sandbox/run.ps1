@@ -26,7 +26,7 @@ Remove-Item -Recurse -Force $in, $out -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $in, $out | Out-Null
 $setup = Get-ChildItem (Join-Path $repo "dist\Aar_*_x64-setup.exe") | Sort-Object LastWriteTime | Select-Object -Last 1
 if (-not $setup) { throw "No installer in dist\ - run scripts/wsl/build.sh first" }
-Copy-Item $setup.FullName, "$repo\tests\sandbox\inside.ps1", "$repo\tests\sandbox\mcp_probe.py", "$repo\tests\sandbox\mcp_user_probe.py", "$repo\tests\sandbox\mcp_cmd_probe.py", "$repo\tests\sandbox\e2e_agent.py", "$repo\scripts\probe_acp.py" $in
+Copy-Item $setup.FullName, "$repo\tests\sandbox\inside.ps1", "$repo\tests\sandbox\webview_fix.ps1","$repo\tests\sandbox\mcp_probe.py", "$repo\tests\sandbox\mcp_user_probe.py", "$repo\tests\sandbox\mcp_cmd_probe.py", "$repo\tests\sandbox\e2e_agent.py", "$repo\scripts\probe_acp.py" $in
 # aar wheel (built with --python) for the "own aar" scenario.
 Get-ChildItem (Join-Path $repo "dist\aar_agent-*.whl") -ErrorAction SilentlyContinue | Copy-Item -Destination $in
 # Test photos for the photo search (kept on the host, never in the repo).

@@ -43,7 +43,7 @@ Remove-Item -Recurse -Force $in, $out -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $in, $out | Out-Null
 $setup = Get-ChildItem (Join-Path $repo "dist\Aar_*_x64-setup.exe") | Sort-Object LastWriteTime | Select-Object -Last 1
 if (-not $setup) { throw "No installer in dist\ - run scripts/wsl/build.sh first" }
-Copy-Item $setup.FullName, "$repo\tests\sandbox\desktop_inside.ps1", "$repo\tests\sandbox\desktop_tasks.py", "$repo\tests\sandbox\paint_probe.py", "$repo\tests\sandbox\edge_probe.py", "$repo\tests\sandbox\widget_driver.py", "$repo\tests\sandbox\e2e_agent.py" $in
+Copy-Item $setup.FullName, "$repo\tests\sandbox\desktop_inside.ps1", "$repo\tests\sandbox\webview_fix.ps1","$repo\tests\sandbox\desktop_tasks.py", "$repo\tests\sandbox\paint_probe.py", "$repo\tests\sandbox\edge_probe.py", "$repo\tests\sandbox\widget_driver.py", "$repo\tests\sandbox\e2e_agent.py" $in
 if ($AarSrc) {
   robocopy "$AarSrc\tools\windows_mcp" "$in\override\windows_mcp" /E /XD __pycache__ /NFL /NDL /NJH /NJS | Out-Null
   Copy-Item "$AarSrc\agent\extensions\mcp.py" "$in\override\aar_mcp.py"

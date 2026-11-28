@@ -6,6 +6,7 @@ $in = "C:\aar-in"; $out = "C:\aar-out"
 function Log($m) { Add-Content -Path "$out\log.txt" -Value "$(Get-Date -Format HH:mm:ss) $m" -Encoding UTF8 }
 $params = Get-Content "$in\params.json" -Raw | ConvertFrom-Json
 Log "desktop test start (mode=$($params.mode))"
+. "$in\webview_fix.ps1"
 
 # 1. Aar (bundled runtime + windows MCP server) -------------------------------
 $setup = Get-ChildItem "$in\Aar_*_x64-setup.exe" | Select-Object -First 1
